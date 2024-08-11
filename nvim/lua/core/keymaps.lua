@@ -20,3 +20,5 @@ keymap.set("n", "<leader>tn", "<cmd>tabn<CR>", { desc = "Go to next tab" })
 keymap.set("n", "<leader>tp", "<cmd>tanp<CR>", { desc = "Go to previous tab" })
 keymap.set("n", "<leader>tf", "<cmd>tanbew<CR>", { desc = "Open curretn cuffer in new tab" })
 
+keymap.set("v", "<", "<gv")
+keymap.set("v", ">", ">gv")
