@@ -1,0 +1,48 @@
+format = """
+$directory\
+$git_branch\
+$fill\
+$python\
+$custom\
+$docker_context\
+$jobs\
+$cmd_duration\
+$line_break\
+$character"""
+
+[fill]
+symbol = ' '
+
+
+[python]
+style = 'teal'
+symbol = ' '
+format = '[${symbol}${pyenv_prefix}(${version} )(\($virtualenv\) )]($style)'
+disabled = false
+
+[aws]
+symbol = ' '
+style = 'yellow'
+format = '[$symbol($account )(\[$duration\] )]($style)'
+
+[custom.aws]
+when = "test -n \"$AWS_PROFILE\""
+command = "echo  ${AWS_PROFILE%%.*}"
+style = "yellow"
+
+[gcloud]
+format = '[$project]($style) '
+style = 'bold green'
+symbol = ' '  
+
+[jobs]
+symbol = ' '
+style = 'red'
+number_threshold = 1
+format = '[$symbol]($style)'
+
+[cmd_duration]
+min_time = 500
+style = 'fg:gray'
+format = '[$duration]($style)'
+

@@ -1,0 +1,43 @@
+eval "$(/opt/homebrew/bin/brew shellenv)"
+eval "$(zoxide init zsh)"
+eval "$(atuin init zsh)"
+
+# --- user local executables ---
+if [ -d "$HOME/.local/bin" ]; then
+  case ":$PATH:" in
+    *":$HOME/.local/bin:"*) : ;;                 # already exists
+    *) export PATH="$HOME/.local/bin:$PATH" ;;   # prepend
+  esac
+fi
+
+source $(brew --prefix)/share/zsh-syntax-highlighting/zsh-syntax-highlighting.zsh
+ZSH_AUTOSUGGEST_HIGHLIGHT_STYLE='fg=#8a8a8a'
+
+source $(brew --prefix)/share/zsh-autosuggestions/zsh-autosuggestions.zsh
+
+# Aliases
+[ -f "$HOME/.config/zsh/aliases.zsh" ] && source "$HOME/.config/zsh/aliases.zsh"
+
+# Custom zsh
+[ -f "$HOME/.config/zsh/custom.zsh" ] && source "$HOME/.config/zsh/custom.zsh"
+
+# Starship
+export STARSHIP_CONFIG="$HOME/.config/starship/starship.toml"
+eval "$(starship init zsh)"
+
+export PATH="/opt/homebrew/opt/mysql-client/bin:$PATH"
+
+fastfetch
+
+# Added by Antigravity
+export PATH="/Users/giho/.antigravity/antigravity/bin:$PATH"
+
+# opencode
+export PATH=/Users/giho/.opencode/bin:$PATH
+
+# bun completions
+[ -s "/Users/giho/.bun/_bun" ] && source "/Users/giho/.bun/_bun"
+
+# bun
+export BUN_INSTALL="$HOME/.bun"
+export PATH="$BUN_INSTALL/bin:$PATH"

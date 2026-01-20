@@ -1,0 +1,11 @@
+# --- chezmoi self config (never track)
+.config/chezmoi/**
+
+# --- tmux plugins (3rd party binaries, node_modules, false-positive secrets)
+.config/tmux/.tmux/plugins/**
+
+# --- common build / runtime artifacts (prevent future false positives)
+**/node_modules/**
+**/dist/**
+**/.cache/**
+
