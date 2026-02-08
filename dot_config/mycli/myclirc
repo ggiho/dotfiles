@@ -1,0 +1,196 @@
+# vi: ft=dosini
+[main]
+
+# Enable or disable the automatic displaying of warnings ("SHOW WARNINGS")
+# after executing a SQL statement when applicable.
+show_warnings = False
+
+# Sets the desired behavior for handling secure connections to the database server.
+# Possible values:
+# auto = SSL is preferred. Will attempt to connect via SSL, but will fallback to cleartext as needed.
+# on = SSL is required. Will attempt to connect via SSL and will fail if a secure connection is not established.
+# off = do not use SSL. Will fail if the server requires a secure connection.
+ssl_mode = auto
+
+# Enables context sensitive auto-completion. If this is disabled the all
+# possible completions will be listed.
+smart_completion = True
+
+# Include system schemas (information_schema, performance_schema, mysql, sys)
+# in auto-completion. Enable this if you frequently query system tables using
+# schema.table format (e.g., FROM information_schema.TABLES).
+include_system_schemas = True
+
+# Multi-line mode allows breaking up the sql statements into multiple lines. If
+# this is set to True, then the end of the statements must have a semi-colon.
+# If this is set to False then sql statements can't be split into multiple
+# lines. End of line (return) is considered as the end of the statement.
+multi_line = False
+
+# Destructive warning mode will alert you before executing a sql statement
+# that may cause harm to the database such as "drop table", "drop database"
+# or "shutdown".
+destructive_warning = True
+
+# Queries starting with these keywords will activate the destructive warning.
+# UPDATE will not activate the warning if the statement includes a WHERE
+# clause.
+destructive_keywords = DROP SHUTDOWN DELETE TRUNCATE ALTER UPDATE
+
+# interactive query history location.
+history_file = ~/.mycli-history
+
+# log_file location.
+log_file = ~/.mycli.log
+
+# Default log level. Possible values: "CRITICAL", "ERROR", "WARNING", "INFO"
+# and "DEBUG". "NONE" disables logging.
+log_level = INFO
+
+# Log every query and its results to a file. Enable this by uncommenting the
+# line below.
+# audit_log = ~/.mycli-audit.log
+
+# Timing of SQL statements and table rendering, or LLM commands.
+timing = True
+
+# Show the full SQL when running a favorite query. Set to False to hide.
+show_favorite_query = True
+
+# Beep after long-running queries are completed; 0 to disable.
+beep_after_seconds = 0
+
+# Table format. Possible values: ascii, ascii_escaped, csv, csv-noheader,
+# csv-tab, csv-tab-noheader, double, fancy_grid, github, grid, html, jira,
+# jsonl, jsonl_escaped, latex, latex_booktabs, mediawiki, minimal, moinmoin,
+# mysql, mysql_unicode, orgtbl, pipe, plain, psql, psql_unicode, rst, simple,
+# sql-insert, sql-update, sql-update-1, sql-update-2, textile, tsv,
+# tsv_noheader, vertical.
+# Recommended: ascii.
+table_format = ascii
+
+# Redirected otuput format
+# Recommended: csv.
+redirect_format = csv
+
+# How to display the missing value (ie NULL).  Only certain table formats
+# support configuring the missing value.  CSV for example always uses the
+# empty string, and JSON formats use native nulls.
+null_string = <null>
+
+# How to align numeric data in tabular output: right or left.
+numeric_alignment = right
+
+# A command to run after a successful output redirect, with {} to be replaced
+# with the escaped filename.  Mac example: echo {} | pbcopy.  Escaping is not
+# reliable/safe on Windows.
+post_redirect_command =
+
+# Syntax coloring style. Possible values (many support the "-dark" suffix):
+# manni, igor, xcode, vim, autumn, vs, rrt, native, perldoc, borland, tango, emacs,
+# friendly, monokai, paraiso, colorful, murphy, bw, pastie, paraiso, trac, default,
+# fruity.
+# Screenshots at http://mycli.net/syntax
+# Can be further modified in [colors]
+syntax_style = monokai
+
+# Keybindings: Possible values: emacs, vi.
+# Emacs mode: Ctrl-A is home, Ctrl-E is end. All emacs keybindings are available in the REPL.
+# When Vi mode is enabled you can use modal editing features offered by Vi in the REPL.
+key_bindings = emacs
+
+# Enabling this option will show the suggestions in a wider menu. Thus more items are suggested.
+wider_completion_menu = False
+
+# MySQL prompt
+# \D - The full current date
+# \d - Database name
+# \h - Hostname of the server
+# \m - Minutes of the current time
+# \n - Newline
+# \P - AM/PM
+# \p - Port
+# \R - The current time, in 24-hour military time (0-23)
+# \r - The current time, standard 12-hour time (1-12)
+# \s - Seconds of the current time
+# \t - Product type (Percona, MySQL, MariaDB, TiDB)
+# \A - DSN alias name (from the [alias_dsn] section)
+# \u - Username
+# \x1b[...m - insert ANSI escape sequence
+prompt = '\t \u@\h:\d> '
+prompt_continuation = '->'
+
+# Skip intro info on startup and outro info on exit
+less_chatty = False
+
+# Use alias from --login-path instead of host name in prompt
+login_path_as_host = False
+
+# Cause result sets to be displayed vertically if they are too wide for the current window,
+# and using normal tabular format otherwise. (This applies to statements terminated by ; or \G.)
+auto_vertical_output = False
+
+# keyword casing preference. Possible values "lower", "upper", "auto"
+keyword_casing = auto
+
+# disabled pager on startup
+enable_pager = True
+
+# Choose a specific pager
+pager = 'less'
+
+# character set for connections without --charset being set at the CLI
+default_character_set = utf8mb4
+
+[keys]
+# possible values: auto, fzf, reverse_isearch
+control_r = auto
+
+# Custom colors for the completion menu, toolbar, etc.
+
+
+
+[colors]
+# Catppuccin Mocha theme
+# Base colors: bg=#1e1e2e, fg=#cdd6f4, surface0=#313244, surface1=#45475a
+# Accent: blue=#89b4fa, lavender=#b4befe, mauve=#cba6f7, teal=#94e2d5
+
+completion-menu.completion.current = 'bg:#89b4fa #1e1e2e'
+completion-menu.completion = 'bg:#313244 #cdd6f4'
+completion-menu.meta.completion.current = 'bg:#b4befe #1e1e2e'
+completion-menu.meta.completion = 'bg:#45475a #bac2de'
+completion-menu.multi-column-meta = 'bg:#45475a #cdd6f4'
+scrollbar.arrow = 'bg:#313244'
+scrollbar = 'bg:#45475a'
+selected = '#cdd6f4 bg:#585b70'
+search = '#1e1e2e bg:#f9e2af'
+search.current = '#1e1e2e bg:#a6e3a1'
+bottom-toolbar = 'bg:#181825 #bac2de'
+bottom-toolbar.off = 'bg:#181825 #6c7086'
+bottom-toolbar.on = 'bg:#181825 #cdd6f4'
+search-toolbar = 'noinherit bold'
+search-toolbar.text = 'nobold'
+system-toolbar = 'noinherit bold'
+arg-toolbar = 'noinherit bold'
+arg-toolbar.text = 'nobold'
+bottom-toolbar.transaction.valid = 'bg:#181825 #a6e3a1 bold'
+bottom-toolbar.transaction.failed = 'bg:#181825 #f38ba8 bold'
+
+# style classes for colored table output
+output.header = "#89b4fa bold"
+output.odd-row = ""
+output.even-row = ""
+output.null = "#6c7086"
+
+# SQL syntax highlighting
+sql.keyword = 'bold #cba6f7'
+sql.datatype = 'nobold #fab387'
+sql.function = '#89b4fa'
+sql.variable = '#f5c2e7'
+sql.number = '#fab387'
+sql.operator = '#89dceb'
+sql.constant = '#f38ba8'
+sql.comment = 'italic #6c7086'
+sql.symbol = '#94e2d5'
+sql.string = '#a6e3a1'
+sql.escape = '#f5c2e7'
