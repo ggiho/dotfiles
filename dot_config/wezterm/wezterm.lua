@@ -29,16 +29,28 @@ config.window_padding = {
 }
 
 config.keys = {
-  {
-    key = "LeftArrow",
-    mods = "OPT",
-    action = wezterm.action.SendKey { key = "b", mods = "ALT" },
-  },
-  {
-    key = "RightArrow",
-    mods = "OPT",
-    action = wezterm.action.SendKey { key = "f", mods = "ALT" },
-  },
+	{
+		key = "LeftArrow",
+		mods = "OPT",
+		action = wezterm.action.SendKey({ key = "b", mods = "ALT" }),
+	},
+	{
+		key = "RightArrow",
+		mods = "OPT",
+		action = wezterm.action.SendKey({ key = "f", mods = "ALT" }),
+	},
+	-- Ctrl+L: clear current line then clear screen
+	{
+		key = "l",
+		mods = "CTRL",
+		action = wezterm.action.SendString("\x15clear\n"),
+	},
+	-- Cmd+K: clear current line then clear screen
+	{
+		key = "k",
+		mods = "CMD",
+		action = wezterm.action.SendString("\x15clear\n"),
+	},
 }
 
 -- 색상 팔레트: Catppuccin Mocha
@@ -78,6 +90,4 @@ config.colors = {
 	},
 }
 
-
 return config
-
