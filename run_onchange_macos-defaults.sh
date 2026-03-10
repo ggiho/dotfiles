@@ -11,6 +11,8 @@ defaults write -g com.apple.trackpad.scaling -float 2
 # Dock
 defaults write com.apple.dock autohide -bool true
 defaults write com.apple.dock tilesize -int 51
+defaults write com.apple.dock magnification -bool true
+defaults write com.apple.dock largesize -int 82
 
 # Finder
 defaults write com.apple.finder ShowPathbar -bool true
