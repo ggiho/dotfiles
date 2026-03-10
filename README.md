@@ -2,13 +2,7 @@
 
 ## 새 Mac 세팅
 
-### 1. Xcode Command Line Tools 설치
-
-```bash
-xcode-select --install
-```
-
-### 2. dotfiles 설치
+### 1. dotfiles 설치
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/ggiho/dotfiles/main/install.sh | bash
