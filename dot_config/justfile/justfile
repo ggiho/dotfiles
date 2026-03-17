@@ -1,0 +1,282 @@
+# [deprecated: use mysqlsh-dump-data instead]
+# hint: host: e.g. aurora-dev.otg.apac.npr.aws.asurion.net
+# hint: user: e.g. giho.seong
+# hint: database: target schema (empty = user DBs only, excludes mysql/sys/information_schema/performance_schema)
+#
+# mysql-dump-data host user database="":
+#   #!/usr/bin/env bash
+#   set -euo pipefail
+#   timestamp=$(date +%Y%m%d_%H%M%S)
+#   if [ -z "{{database}}" ]; then
+#     out="dump_all_${timestamp}.sql"
+#     dbs=($(mysql --host="{{host}}" --user="{{user}}" \
+#       -Nse "SELECT schema_name FROM information_schema.schemata
+#             WHERE schema_name NOT IN ('mysql','information_schema','performance_schema','sys')"))
+#     mysqldump --host="{{host}}" --user="{{user}}" \
+#       --single-transaction --routines --triggers --events \
+#       --quick --skip-lock-tables --set-gtid-purged=OFF \
+#       --databases "${dbs[@]}" > "$out"
+#   else
+#     out="dump_{{database}}_${timestamp}.sql"
+#     mysqldump --host="{{host}}" --user="{{user}}" \
+#       --single-transaction --routines --triggers --events \
+#       --quick --skip-lock-tables --set-gtid-purged=OFF \
+#       "{{database}}" > "$out"
+#   fi
+#   echo "Written: $out"
+
+# [deprecated: use mysqlsh-dump-no-data instead]
+# hint: host: e.g. aurora-dev.otg.apac.npr.aws.asurion.net
+# hint: user: e.g. giho.seong
+# hint: database: target schema (empty = user DBs only, excludes mysql/sys/information_schema/performance_schema)
+#
+# mysql-dump-no-data host user database="":
+#   #!/usr/bin/env bash
+#   set -euo pipefail
+#   timestamp=$(date +%Y%m%d_%H%M%S)
+#   if [ -z "{{database}}" ]; then
+#     out="dump_all_nodata_${timestamp}.sql"
+#     dbs=($(mysql --host="{{host}}" --user="{{user}}" \
+#       -Nse "SELECT schema_name FROM information_schema.schemata
+#             WHERE schema_name NOT IN ('mysql','information_schema','performance_schema','sys')"))
+#     mysqldump --host="{{host}}" --user="{{user}}" \
+#       --single-transaction --routines --triggers --events \
+#       --quick --skip-lock-tables --set-gtid-purged=OFF --no-data \
+#       --databases "${dbs[@]}" > "$out"
+#   else
+#     out="dump_{{database}}_nodata_${timestamp}.sql"
+#     mysqldump --host="{{host}}" --user="{{user}}" \
+#       --single-transaction --routines --triggers --events \
+#       --quick --skip-lock-tables --set-gtid-purged=OFF --no-data \
+#       "{{database}}" > "$out"
+#   fi
+#   echo "Written: $out"
+
+# hint: host: e.g. aurora-dev.otg.apac.npr.aws.asurion.net
+# hint: user: e.g. giho.seong
+# hint: database: target schema (empty = dump-instance, auto-excludes mysql/sys/information_schema/performance_schema)
+# hint: threads: parallel threads (default: 4)
+# hint: outdir: output directory (default: dump_<database or all>_<timestamp>)
+
+mysqlsh-dump-data host user database="" threads="4" outdir="":
+  #!/usr/bin/env bash
+  set -euo pipefail
+  timestamp=$(date +%Y%m%d_%H%M%S)
+  out="{{outdir}}"
+  if [ -z "{{database}}" ]; then
+    [ -z "$out" ] && out="dump_all_${timestamp}"
+    mysqlsh --host="{{host}}" --user="{{user}}" \
+      -- util dump-instance "$out" \
+      --threads={{threads}} --consistent=true --compression=zstd
+  else
+    [ -z "$out" ] && out="dump_{{database}}_${timestamp}"
+    mysqlsh --host="{{host}}" --user="{{user}}" \
+      -- util dump-schemas "{{database}}" \
+      --outputUrl="$out" \
+      --threads={{threads}} --consistent=true --compression=zstd
+  fi
+  echo "Written: $out/"
+
+# hint: host: e.g. aurora-dev.otg.apac.npr.aws.asurion.net
+# hint: user: e.g. giho.seong
+# hint: database: target schema (empty = dump-instance, auto-excludes mysql/sys/information_schema/performance_schema)
+# hint: threads: parallel threads (default: 4)
+# hint: outdir: output directory (default: dump_<database or all>_nodata_<timestamp>)
+
+mysqlsh-dump-no-data host user database="" threads="4" outdir="":
+  #!/usr/bin/env bash
+  set -euo pipefail
+  timestamp=$(date +%Y%m%d_%H%M%S)
+  out="{{outdir}}"
+  if [ -z "{{database}}" ]; then
+    [ -z "$out" ] && out="dump_all_nodata_${timestamp}"
+    mysqlsh --host="{{host}}" --user="{{user}}" \
+      -- util dump-instance "$out" \
+      --threads={{threads}} --consistent=true --compression=zstd --ddlOnly=true
+  else
+    [ -z "$out" ] && out="dump_{{database}}_nodata_${timestamp}"
+    mysqlsh --host="{{host}}" --user="{{user}}" \
+      -- util dump-schemas "{{database}}" \
+      --outputUrl="$out" \
+      --threads={{threads}} --consistent=true --compression=zstd --ddlOnly=true
+  fi
+  echo "Written: $out/"
+
+# hint: host: e.g. aurora-skt-otg-uat-cluster.cluster-czdk59pd0a4y.ap-northeast-2.rds.amazonaws.com
+# hint: user: e.g. giho.seong
+# hint: indir: dump directory from mysqlsh-dump-data
+# hint: threads: parallel threads (default: 4)
+
+mysqlsh-load host user indir threads="4":
+  #!/usr/bin/env bash
+  set -euo pipefail
+  mysqlsh --host="{{host}}" --user="{{user}}" \
+    -- util load-dump "{{indir}}" \
+    --threads={{threads}} --progressFile="{{indir}}/.load_progress"
+  echo "Loaded: {{indir}}"
+
+# AWS RDS
+
+aws-rds-list:
+  #!/usr/bin/env bash
+  set -euo pipefail
+  aws rds describe-db-clusters \
+    --query 'DBClusters[*].{Cluster:DBClusterIdentifier,Status:Status,Engine:Engine,Version:EngineVersion,Port:Port,Instances:length(DBClusterMembers),Writer:Endpoint,Reader:ReaderEndpoint}' \
+    --output json \
+    | python3 "$HOME/.config/mysql/rds_table.py"
+
+aws-rds-instances:
+  #!/usr/bin/env bash
+  set -euo pipefail
+  aws rds describe-db-instances \
+    --query 'DBInstances[*].{Cluster:DBClusterIdentifier,Instance:DBInstanceIdentifier,Class:DBInstanceClass,Status:DBInstanceStatus,Engine:Engine,Version:EngineVersion,AZ:AvailabilityZone}' \
+    --output json \
+    | python3 "$HOME/.config/mysql/rds_table.py"
+
+# Aurora/RDS user migration
+SANITIZE_SCRIPT := "$HOME/.config/mysql/sanitize_users.py"
+
+# hint: source_host: e.g. aurora-dev.otg.apac.npr.aws.asurion.net
+# hint: source_user: e.g. giho.seong
+# hint: raw_sql: output file for raw pt-show-grants result
+
+mysql-export-users source_host source_user raw_sql="users_raw.sql":
+  #!/usr/bin/env bash
+  set -euo pipefail
+  pt-show-grants --host="{{source_host}}" --user="{{source_user}}" --ask-pass > "{{raw_sql}}"
+  echo "Written: {{raw_sql}}"
+
+# hint: input_sql: raw SQL from pt-show-grants
+# hint: output_sql: sanitized output file for Aurora/RDS
+
+mysql-sanitize-users input_sql="users_raw.sql" output_sql="users_sanitized.sql":
+  #!/usr/bin/env bash
+  set -euo pipefail
+  python3 "{{SANITIZE_SCRIPT}}" "{{input_sql}}" "{{output_sql}}"
+  echo "Written: {{output_sql}}"
+
+# hint: input_sql: sanitized SQL to validate before import
+
+mysql-check-users input_sql="users_sanitized.sql":
+  #!/usr/bin/env bash
+  set -euo pipefail
+  echo "== internal/system accounts =="
+  grep -nE 'rdsadmin|mysql\.session|mysql\.sys|mysql\.infoschema|rds_superuser_role' "{{input_sql}}" || echo "  (none)"
+  echo ""
+  echo "== inline DEFAULT ROLE in ALTER USER =="
+  grep -nE '^ALTER USER .* DEFAULT ROLE ' "{{input_sql}}" || echo "  (none)"
+  echo ""
+  echo "== risky privileges =="
+  grep -nE 'SUPER|SYSTEM_VARIABLES_ADMIN|SESSION_VARIABLES_ADMIN|BINLOG_ADMIN|ROLE_ADMIN|SET_USER_ID|FILE|SHUTDOWN' "{{input_sql}}" || echo "  (none)"
+
+# hint: source_host: e.g. aurora-dev.otg.apac.npr.aws.asurion.net
+# hint: source_user: e.g. giho.seong
+# hint: raw_sql: intermediate raw grants file
+# hint: sanitized_sql: final Aurora-compatible output file
+
+mysql-dump-users source_host source_user raw_sql="users_raw.sql" sanitized_sql="users_sanitized.sql":
+  #!/usr/bin/env bash
+  set -euo pipefail
+
+  echo "[1/3] Dumping grants from {{source_host}}..."
+  pt-show-grants --host="{{source_host}}" --user="{{source_user}}" --ask-pass > "{{raw_sql}}"
+  echo "  Written: {{raw_sql}}"
+
+  echo "[2/3] Sanitizing for Aurora/RDS..."
+  python3 "{{SANITIZE_SCRIPT}}" "{{raw_sql}}" "{{sanitized_sql}}"
+  echo "  Written: {{sanitized_sql}}"
+
+  echo "[3/3] Checking for leftover issues..."
+  issues=0
+  if grep -qE 'rdsadmin|mysql\.session|mysql\.sys|mysql\.infoschema|rds_superuser_role' "{{sanitized_sql}}"; then
+    echo "  [WARN] internal/system accounts found:"
+    grep -nE 'rdsadmin|mysql\.session|mysql\.sys|mysql\.infoschema|rds_superuser_role' "{{sanitized_sql}}"
+    issues=$((issues + 1))
+  fi
+  if grep -qE '^ALTER USER .* DEFAULT ROLE ' "{{sanitized_sql}}"; then
+    echo "  [WARN] inline DEFAULT ROLE in ALTER USER:"
+    grep -nE '^ALTER USER .* DEFAULT ROLE ' "{{sanitized_sql}}"
+    issues=$((issues + 1))
+  fi
+  if grep -qE 'SUPER|SYSTEM_VARIABLES_ADMIN|SESSION_VARIABLES_ADMIN|BINLOG_ADMIN|ROLE_ADMIN|SET_USER_ID|FILE|SHUTDOWN' "{{sanitized_sql}}"; then
+    echo "  [WARN] risky privileges found:"
+    grep -nE 'SUPER|SYSTEM_VARIABLES_ADMIN|SESSION_VARIABLES_ADMIN|BINLOG_ADMIN|ROLE_ADMIN|SET_USER_ID|FILE|SHUTDOWN' "{{sanitized_sql}}"
+    issues=$((issues + 1))
+  fi
+  if [ "$issues" -eq 0 ]; then
+    echo "  OK — no issues found"
+  fi
+  echo ""
+  echo "Review {{sanitized_sql}}, then run: just mysql-import-users <target_host> <target_user> {{sanitized_sql}}"
+
+# hint: target_host: e.g. aurora-skt-otg-uat-cluster.cluster-czdk59pd0a4y.ap-northeast-2.rds.amazonaws.com
+# hint: target_user: e.g. giho.seong
+# hint: input_sql: sanitized SQL to import
+
+mysql-import-users target_host target_user input_sql="users_sanitized.sql":
+  #!/usr/bin/env bash
+  set -euo pipefail
+  mysql --host="{{target_host}}" --user="{{target_user}}" --password < "{{input_sql}}"
+  echo "Imported: {{input_sql}}"
+
+# hint: host: e.g. aurora-dev.otg.apac.npr.aws.asurion.net
+# hint: user: e.g. giho.seong
+
+mysql-binlog-status host user:
+  #!/usr/bin/env bash
+  set -euo pipefail
+  echo "== Current binlog position =="
+  mysql --host="{{host}}" --user="{{user}}" --password \
+    -e "SHOW MASTER STATUS\G"
+  echo ""
+  echo "== Available binary logs =="
+  mysql --host="{{host}}" --user="{{user}}" --password \
+    -e "SHOW BINARY LOGS"
+
+# hint: host: e.g. aurora-dev.otg.apac.npr.aws.asurion.net
+# hint: user: e.g. giho.seong
+# hint: binlog: binlog filename (from mysql-binlog-status)
+# hint: start_datetime: e.g. "2026-03-17 09:00:00"
+# hint: stop_datetime: e.g. "2026-03-17 10:00:00"
+# hint: output: output SQL file (default: binlog_recover_<timestamp>.sql)
+
+mysql-binlog-extract host user binlog start_datetime stop_datetime output="":
+  #!/usr/bin/env bash
+  set -euo pipefail
+  timestamp=$(date +%Y%m%d_%H%M%S)
+  out="{{output}}"
+  [ -z "$out" ] && out="binlog_recover_${timestamp}.sql"
+  mysqlbinlog \
+    --read-from-remote-server \
+    --host="{{host}}" \
+    --user="{{user}}" \
+    --password \
+    --start-datetime="{{start_datetime}}" \
+    --stop-datetime="{{stop_datetime}}" \
+    "{{binlog}}" > "$out"
+  echo "Written: $out"
+  echo "Review $out, then run: mysql --host=<target> --user=<user> --password < $out"
+
+# hint: host: e.g. aurora-dev.otg.apac.npr.aws.asurion.net
+# hint: user: e.g. giho.seong
+# hint: binlog: binlog filename (from mysql-binlog-status)
+# hint: start_position: start position (from SHOW MASTER STATUS)
+# hint: stop_position: stop position
+# hint: output: output SQL file (default: binlog_recover_<timestamp>.sql)
+
+mysql-binlog-extract-pos host user binlog start_position stop_position output="":
+  #!/usr/bin/env bash
+  set -euo pipefail
+  timestamp=$(date +%Y%m%d_%H%M%S)
+  out="{{output}}"
+  [ -z "$out" ] && out="binlog_recover_${timestamp}.sql"
+  mysqlbinlog \
+    --read-from-remote-server \
+    --host="{{host}}" \
+    --user="{{user}}" \
+    --password \
+    --start-position="{{start_position}}" \
+    --stop-position="{{stop_position}}" \
+    "{{binlog}}" > "$out"
+  echo "Written: $out"
+  echo "Review $out, then run: mysql --host=<target> --user=<user> --password < $out"
