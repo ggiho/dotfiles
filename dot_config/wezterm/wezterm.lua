@@ -28,6 +28,10 @@ config.window_padding = {
 	bottom = 5,
 }
 
+-- Option 키를 macOS 특수문자가 아닌 Alt(ESC prefix)로 전달
+config.send_composed_key_when_left_alt_is_pressed = false
+config.send_composed_key_when_right_alt_is_pressed = false
+
 config.keys = {
 	{
 		key = "LeftArrow",

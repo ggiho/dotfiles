@@ -29,9 +29,6 @@ export PATH="/opt/homebrew/opt/mysql-client/bin:$PATH"
 
 fastfetch
 
-# Added by Antigravity
-export PATH="/Users/giho/.antigravity/antigravity/bin:$PATH"
-
 # opencode
 export PATH=/Users/giho/.opencode/bin:$PATH
 
