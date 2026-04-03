@@ -10,6 +10,7 @@ defaults write -g com.apple.trackpad.scaling -float 2
 defaults write -g com.apple.trackpad.forceClick -bool true
 
 defaults write com.apple.AppleMultitouchTrackpad Clicking -bool true
+defaults -currentHost write NSGlobalDomain com.apple.mouse.tapBehavior -int 1
 defaults write com.apple.AppleMultitouchTrackpad TrackpadThreeFingerDrag -bool true
 defaults write com.apple.AppleMultitouchTrackpad TrackpadRightClick -bool true
 defaults write com.apple.AppleMultitouchTrackpad TrackpadPinch -bool true
