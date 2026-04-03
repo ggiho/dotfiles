@@ -54,5 +54,6 @@ defaults write com.apple.finder ShowStatusBar -bool false
 defaults write -g AppleInterfaceStyle -string "Dark"
 
 # Restart affected apps
+killall cfprefsd 2>/dev/null
 killall Dock 2>/dev/null
 killall Finder 2>/dev/null
