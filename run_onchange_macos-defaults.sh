@@ -54,6 +54,36 @@ defaults write com.apple.finder ShowStatusBar -bool false
 # Dark mode
 defaults write -g AppleInterfaceStyle -string "Dark"
 
+# Input source switch (F18)
+defaults write com.apple.symbolichotkeys AppleSymbolicHotKeys -dict-add 60 '
+<dict>
+    <key>enabled</key><true/>
+    <key>value</key>
+    <dict>
+        <key>type</key><string>standard</string>
+        <key>parameters</key>
+        <array>
+            <integer>65535</integer>
+            <integer>79</integer>
+            <integer>8388608</integer>
+        </array>
+    </dict>
+</dict>'
+defaults write com.apple.symbolichotkeys AppleSymbolicHotKeys -dict-add 61 '
+<dict>
+    <key>enabled</key><false/>
+    <key>value</key>
+    <dict>
+        <key>type</key><string>standard</string>
+        <key>parameters</key>
+        <array>
+            <integer>65535</integer>
+            <integer>79</integer>
+            <integer>8388608</integer>
+        </array>
+    </dict>
+</dict>'
+
 # Apply settings
 /System/Library/PrivateFrameworks/SystemAdministration.framework/Resources/activateSettings -u
 
