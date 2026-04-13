@@ -9,3 +9,6 @@
 **/dist/**
 **/.cache/**
 
+# --- nvim auto-generated files
+.config/nvim/lazy-lock.json
+
