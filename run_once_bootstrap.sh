@@ -13,6 +13,9 @@ if [ ! -d "$HOME/.config/tmux/.tmux/plugins/tpm" ]; then
   git clone https://github.com/tmux-plugins/tpm ~/.config/tmux/.tmux/plugins/tpm
 fi
 
+echo "Installing tmux plugins..."
+~/.config/tmux/.tmux/plugins/tpm/bin/install_plugins
+
 # Dock 구성
 if command -v dockutil &>/dev/null; then
   echo "Configuring Dock..."
