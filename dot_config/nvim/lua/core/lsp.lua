@@ -227,7 +227,7 @@ vim.api.nvim_create_autocmd("LspAttach", {
 		map("gD", vim.lsp.buf.declaration, "[g]oto [d]eclaration")
 
 		-- Code formatting (commonly used feature)
-		if client and client.supports_method("textDocument/formatting") then
+		if client and client:supports_method("textDocument/formatting") then
 			map("<leader>f", function()
 				vim.lsp.buf.format({ async = true })
 			end, "[F]ormat code")
