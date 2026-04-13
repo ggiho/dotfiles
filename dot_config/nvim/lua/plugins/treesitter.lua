@@ -1,16 +1,2 @@
-return {
-	"nvim-treesitter/nvim-treesitter",
-	branch = "master",
-	build = ":TSUpdate",
-	event = { "BufReadPost", "BufNewFile" },
-	config = function()
-		local configs = require("nvim-treesitter.configs")
-		configs.setup({
-			-- ensure_installed = {"lua", "vim", "vimdoc", "query", "python", "go" },
-			auto_install = true,
-			sync_install = false,
-			highlight = { enable = true },
-			indent = { enable = true },
-		})
-	end,
-}
+-- nvim 0.12+ has built-in treesitter; no plugin needed
+return {}
