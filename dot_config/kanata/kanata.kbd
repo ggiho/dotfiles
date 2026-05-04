@@ -1,0 +1,62 @@
+;; Home Row Mods + Navigation Layer
+;;
+;;   A -> tap a / hold Left Control + Nav layer
+;;   S -> tap s / hold Left Option(Alt)
+;;   D -> tap d / hold Left Command(Meta)
+;;   F -> tap f / hold Left Shift
+;;   ; -> tap ; / hold Right Shift
+;;
+;; Nav layer (A hold + key):
+;;   H=Left  J=Down  K=Up  L=Right  G=Home  ;=End
+;;
+;; Caps Lock -> macOS 기본 (한영전환)
+
+(defcfg
+  process-unmapped-keys yes
+  concurrent-tap-hold yes
+  macos-dev-names-include (
+    "Apple Internal Keyboard / Trackpad"
+  )
+)
+
+(defsrc
+  f1 f2 f3 f4 f5 f6 f7 f8 f9 f10 f11 f12
+  caps lctl a s d f g h ; x c v rmet rctl j k l i o m , .
+)
+
+(defchordsv2
+  (a s) C-a 50 all-released ()
+  (j k) bspc 50 all-released ()
+  (k l) esc 50 all-released ()
+  (, .) S-/ 50 all-released ()
+  (j i) - 50 all-released ()
+  (j o) = 50 all-released ()
+  (x c) M-c 50 all-released ()
+  (c v) M-v 50 all-released ()
+  (m ,) caps 50 all-released ()
+)
+
+(defalias
+  nav_home (multi (release-key lctl) home)
+  nav_left (multi (release-key lctl) left)
+  nav_end  (multi (release-key lctl) end)
+  nav_down (multi (release-key lctl) down)
+  nav_up   (multi (release-key lctl) up)
+  nav_rght (multi (release-key lctl) rght)
+
+  a_hrm    (tap-hold      130 200 a (multi lctl (layer-while-held ctrl-nav)))
+  s_hrm    (tap-hold      130 180 s lalt)
+  d_hrm    (tap-hold      130 180 d lmet)
+  f_hrm    (tap-hold        0 155 f lsft)
+  scln_hrm (tap-hold-press  0 120 ; rsft)
+)
+
+(deflayer base
+  brdn brup _ _ _ _ prev pp next mute vold volu
+  caps lctl @a_hrm @s_hrm @d_hrm @f_hrm g h @scln_hrm x c v ret f18 j k l i o m , .
+)
+
+(deflayer ctrl-nav
+  _ _ _ _ _ _ _ _ _ _ _ _
+  _ _ _ _ _ _ @nav_home @nav_left @nav_end _ _ _ _ _ @nav_down @nav_up @nav_rght i o m , .
+)

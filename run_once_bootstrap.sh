@@ -16,6 +16,12 @@ fi
 echo "Installing tmux plugins..."
 ~/.config/tmux/.tmux/plugins/tpm/bin/install_plugins
 
+# kanata (keyboard remapper) 설정
+if command -v kanata &>/dev/null && [ -f "$HOME/.config/kanata/scripts/install-launchd.sh" ]; then
+  echo "Installing kanata launchd services..."
+  sudo "$HOME/.config/kanata/scripts/install-launchd.sh"
+fi
+
 # Dock 구성
 if command -v dockutil &>/dev/null; then
   echo "Configuring Dock..."
