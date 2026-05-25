@@ -29,8 +29,6 @@ if command -v dockutil &>/dev/null; then
 
   dockutil --add /System/Applications/Apps.app --no-restart
   dockutil --add /System/Applications/System\ Settings.app --no-restart
-  dockutil --add /Applications/Microsoft\ Outlook.app --no-restart
-  dockutil --add /Applications/Microsoft\ Teams.app --no-restart
   dockutil --add /Applications/Google\ Chrome.app --no-restart
   dockutil --add /Applications/Zen.app --no-restart
   dockutil --add /Applications/WezTerm.app --no-restart
