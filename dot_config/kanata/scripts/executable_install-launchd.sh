@@ -10,8 +10,10 @@ MANAGER='/Applications/.Karabiner-VirtualHIDDevice-Manager.app/Contents/MacOS/Ka
 VHID_DAEMON='/Library/Application Support/org.pqrs/Karabiner-DriverKit-VirtualHIDDevice/Applications/Karabiner-VirtualHIDDevice-Daemon.app/Contents/MacOS/Karabiner-VirtualHIDDevice-Daemon'
 KANATA='/opt/homebrew/bin/kanata'
 
-[[ -x "$MANAGER" ]] || { echo "Missing manager: $MANAGER" >&2; exit 1; }
-[[ -x "$VHID_DAEMON" ]] || { echo "Missing VirtualHID daemon: $VHID_DAEMON" >&2; exit 1; }
+# Kanata on macOS uses Karabiner's VirtualHIDDevice runtime only.
+# Do not remove the hidden manager or DriverKit daemon when cleaning up Karabiner UI/config.
+[[ -x "$MANAGER" ]] || { echo "Missing VirtualHID manager required by kanata: $MANAGER" >&2; exit 1; }
+[[ -x "$VHID_DAEMON" ]] || { echo "Missing VirtualHID daemon required by kanata: $VHID_DAEMON" >&2; exit 1; }
 [[ -x "$KANATA" ]] || { echo "Missing kanata: $KANATA" >&2; exit 1; }
 
 install -d -m 755 "$PLIST_DIR"

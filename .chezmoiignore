@@ -12,3 +12,9 @@
 # --- nvim auto-generated files
 .config/nvim/lazy-lock.json
 
+
+# --- Karabiner legacy config (Kanata only needs the VirtualHIDDevice runtime)
+.config/karabiner/**
+Library/Preferences/org.pqrs.Karabiner-Elements*.plist
+Library/Preferences/org.pqrs.Karabiner-EventViewer.plist
+Library/Preferences/org.pqrs.Karabiner-Updater.plist
