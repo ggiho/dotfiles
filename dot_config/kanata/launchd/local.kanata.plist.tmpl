@@ -8,11 +8,11 @@
   <array>
     <string>/opt/homebrew/bin/kanata</string>
     <string>--cfg</string>
-    <string>/Users/giho.seong/.config/kanata/kanata.kbd</string>
+    <string>{{ .chezmoi.homeDir }}/.config/kanata/kanata.kbd</string>
     <string>--no-wait</string>
   </array>
   <key>WorkingDirectory</key>
-  <string>/Users/giho.seong/.config/kanata</string>
+  <string>{{ .chezmoi.homeDir }}/.config/kanata</string>
   <key>RunAtLoad</key>
   <true/>
   <key>KeepAlive</key>

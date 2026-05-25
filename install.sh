@@ -41,3 +41,8 @@ else
   echo "Initializing chezmoi from $DOTFILES_REPO and applying dotfiles..."
   chezmoi init --apply "$DOTFILES_REPO"
 fi
+
+if command -v kanata >/dev/null 2>&1 && [[ -x "$HOME/.config/kanata/scripts/install-launchd.sh" ]]; then
+  echo 'Ensuring Kanata launchd services are installed...'
+  sudo "$HOME/.config/kanata/scripts/install-launchd.sh"
+fi
