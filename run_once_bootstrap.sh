@@ -18,7 +18,7 @@ echo "Installing tmux plugins..."
 
 # kanata (keyboard remapper) 설정
 if command -v kanata &>/dev/null && [ -f "$HOME/.config/kanata/scripts/install-launchd.sh" ]; then
-  echo "Installing kanata launchd services..."
+  echo "Installing Kanata VirtualHIDDevice and launchd services..."
   sudo "$HOME/.config/kanata/scripts/install-launchd.sh"
 fi
 
