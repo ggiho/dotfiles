@@ -1,3 +1,10 @@
+# ── Path variables ────────────────────────────────────────────────────────────
+HOSTS_FILE      := "$HOME/.config/mysql/hosts"
+SANITIZE_SCRIPT := "$HOME/.config/mysql/sanitize_users.py"
+DDB_SCRIPT_DIR  := env_var_or_default("DDB_SCRIPT_DIR", env_var("HOME") + "/10_Database/AWS/dynamodb")
+DMSCTL_ROOT     := env_var_or_default("DMSCTL_ROOT", env_var("HOME") + "/20_Work/01_Asurion/scripts/aws/dms")
+# ──────────────────────────────────────────────────────────────────────────────
+
 # [deprecated: use mysqlsh-dump-data instead]
 # hint: host: e.g. aurora-dev.otg.apac.npr.aws.asurion.net
 # hint: user: e.g. giho.seong
@@ -54,6 +61,33 @@
 
 # hint: host: e.g. aurora-dev.otg.apac.npr.aws.asurion.net
 # hint: user: e.g. giho.seong
+# hint: database: target schema
+# hint: tables: comma-separated table names (e.g. TABLE1,TABLE2)
+# hint: threads: parallel threads (default: 4)
+# hint: outdir: output directory (default: dump_<database>_tables_<timestamp>)
+
+mysqlsh-dump-tables host user database tables threads="4" outdir="":
+  #!/usr/bin/env bash
+  set -euo pipefail
+  timestamp=$(date +%Y%m%d_%H%M%S)
+  out="{{outdir}}"
+  [ -z "$out" ] && out="dump_{{database}}_tables_${timestamp}"
+  IFS=',' read -r -a raw_tbl_array <<< "{{tables}}"
+  [ "${#raw_tbl_array[@]}" -gt 0 ] || { echo "No tables provided" >&2; exit 1; }
+  tbl_array=()
+  for table in "${raw_tbl_array[@]}"; do
+    table=$(printf '%s' "$table" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')
+    [ -z "$table" ] && { echo "Empty table name in tables list" >&2; exit 1; }
+    tbl_array+=("$table")
+  done
+  mysqlsh --host="{{host}}" --user="{{user}}" \
+    -- util dump-tables "{{database}}" "${tbl_array[@]}" \
+    --outputUrl="$out" \
+    --threads={{threads}} --consistent=false --compression=zstd
+  echo "Written: $out/"
+
+# hint: host: e.g. aurora-dev.otg.apac.npr.aws.asurion.net
+# hint: user: e.g. giho.seong
 # hint: database: target schema (empty = dump-instance, auto-excludes mysql/sys/information_schema/performance_schema)
 # hint: threads: parallel threads (default: 4)
 # hint: outdir: output directory (default: dump_<database or all>_<timestamp>)
@@ -67,13 +101,13 @@ mysqlsh-dump-data host user database="" threads="4" outdir="":
     [ -z "$out" ] && out="dump_all_${timestamp}"
     mysqlsh --host="{{host}}" --user="{{user}}" \
       -- util dump-instance "$out" \
-      --threads={{threads}} --consistent=true --compression=zstd
+      --threads={{threads}} --consistent=false --compression=zstd
   else
     [ -z "$out" ] && out="dump_{{database}}_${timestamp}"
     mysqlsh --host="{{host}}" --user="{{user}}" \
       -- util dump-schemas "{{database}}" \
       --outputUrl="$out" \
-      --threads={{threads}} --consistent=true --compression=zstd
+      --threads={{threads}} --consistent=false --compression=zstd
   fi
   echo "Written: $out/"
 
@@ -92,13 +126,13 @@ mysqlsh-dump-no-data host user database="" threads="4" outdir="":
     [ -z "$out" ] && out="dump_all_nodata_${timestamp}"
     mysqlsh --host="{{host}}" --user="{{user}}" \
       -- util dump-instance "$out" \
-      --threads={{threads}} --consistent=true --compression=zstd --ddlOnly=true
+      --threads={{threads}} --consistent=false --compression=zstd --ddlOnly=true
   else
     [ -z "$out" ] && out="dump_{{database}}_nodata_${timestamp}"
     mysqlsh --host="{{host}}" --user="{{user}}" \
       -- util dump-schemas "{{database}}" \
       --outputUrl="$out" \
-      --threads={{threads}} --consistent=true --compression=zstd --ddlOnly=true
+      --threads={{threads}} --consistent=false --compression=zstd --ddlOnly=true
   fi
   echo "Written: $out/"
 
@@ -106,35 +140,217 @@ mysqlsh-dump-no-data host user database="" threads="4" outdir="":
 # hint: user: e.g. giho.seong
 # hint: indir: dump directory from mysqlsh-dump-data
 # hint: threads: parallel threads (default: 4)
+# hint: target_schema: optional schema to load into; leave empty to use dump schema
 
-mysqlsh-load host user indir threads="4":
+mysqlsh-load host user indir threads="4" target_schema="":
   #!/usr/bin/env bash
   set -euo pipefail
-  mysqlsh --host="{{host}}" --user="{{user}}" \
-    -- util load-dump "{{indir}}" \
-    --threads={{threads}} --progressFile="{{indir}}/.load_progress"
-  echo "Loaded: {{indir}}"
+
+  target_schema="{{target_schema}}"
+  progress_file="{{indir}}/.load_progress"
+  load_args=(
+    -- util load-dump "{{indir}}"
+    --threads={{threads}}
+  )
+
+  if [ -n "$target_schema" ]; then
+    safe_schema=$(printf '%s' "$target_schema" | tr -c 'A-Za-z0-9_.-' '_')
+    progress_file="{{indir}}/.load_progress_${safe_schema}"
+    load_args+=(--schema="$target_schema")
+  fi
+
+  load_args+=(--progressFile="$progress_file")
+
+  mysqlsh --host="{{host}}" --user="{{user}}" "${load_args[@]}"
+  if [ -n "$target_schema" ]; then
+    echo "Loaded: {{indir}} into schema $target_schema"
+  else
+    echo "Loaded: {{indir}}"
+  fi
+
+# hint: host: e.g. aurora-skt-otg-uat-cluster.cluster-czdk59pd0a4y.ap-northeast-2.rds.amazonaws.com
+# hint: user: e.g. giho.seong
+# hint: indir: dump directory from mysqlsh-dump-tables
+# hint: target_schema: final schema to move into (e.g. datawarehouse)
+# hint: source_table: dumped table name before rename (e.g. fact_enrollment)
+# hint: target_table: final table name after rename (e.g. fact_enrollment_new)
+# hint: threads: parallel threads (default: 4)
+
+mysqlsh-load-rename-table host user indir target_schema source_table target_table threads="4":
+  #!/usr/bin/env bash
+  set -euo pipefail
+
+  escape_ident() {
+    printf '%s' "$1" | sed 's/`/``/g'
+  }
+
+  timestamp=$(date +%Y%m%d_%H%M%S)
+  temp_schema="_tmp_restore_{{source_table}}_${timestamp}"
+  tmp_schema_esc=$(escape_ident "$temp_schema")
+  source_table_esc=$(escape_ident "{{source_table}}")
+  target_schema_esc=$(escape_ident "{{target_schema}}")
+  target_table_esc=$(escape_ident "{{target_table}}")
+  progress_file="{{indir}}/.load_progress_${temp_schema}_{{source_table}}"
+
+  cleanup_temp_schema() {
+    local cleanup_sql
+    printf -v cleanup_sql 'DROP DATABASE IF EXISTS `%s`;' "$tmp_schema_esc"
+    mysqlsh --host="{{host}}" --user="{{user}}" --sql -e "$cleanup_sql"
+  }
+
+  on_error() {
+    echo "Restore failed. Temporary schema kept: $temp_schema" >&2
+  }
+  trap on_error ERR
+
+  printf -v create_sql 'CREATE DATABASE IF NOT EXISTS `%s`; CREATE DATABASE IF NOT EXISTS `%s`;'     "$tmp_schema_esc" "$target_schema_esc"
+  mysqlsh --host="{{host}}" --user="{{user}}" --sql -e "$create_sql"
+
+  printf -v load_js 'util.loadDump("%s", {schema: "%s", threads: %s, progressFile: "%s"})'     "{{indir}}" "$temp_schema" "{{threads}}" "$progress_file"
+  mysqlsh --host="{{host}}" --user="{{user}}" --js -e "$load_js"
+
+  printf -v rename_sql 'RENAME TABLE `%s`.`%s` TO `%s`.`%s`;'     "$tmp_schema_esc" "$source_table_esc" "$target_schema_esc" "$target_table_esc"
+  mysqlsh --host="{{host}}" --user="{{user}}" --sql -e "$rename_sql"
+
+  cleanup_temp_schema
+  trap - ERR
+  echo "Loaded {{indir}} into {{target_schema}}.{{target_table}} via temp schema $temp_schema"
+
+# DynamoDB
+
+# DynamoDB 테이블 목록 조회
+ddb-list:
+  aws dynamodb list-tables --output table
+
+# fzf로 테이블 선택 후 상세 정보 조회
+ddb-describe:
+  #!/usr/bin/env bash
+  set -euo pipefail
+  selected=$(aws dynamodb list-tables --output json | \
+    python3 -c "import sys,json; [print(t) for t in json.load(sys.stdin)['TableNames']]" | \
+    fzf --prompt="table> " --height=40% --scheme=default)
+  [ -z "$selected" ] && exit 0
+  aws dynamodb describe-table --table-name "$selected" | python3 -m json.tool
+
+# fzf로 테이블 선택 후 정확한 row 수 조회 (scan count, 대용량 주의)
+ddb-count:
+  #!/usr/bin/env bash
+  set -euo pipefail
+  selected=$(aws dynamodb list-tables --output json | \
+    python3 -c "import sys,json; [print(t) for t in json.load(sys.stdin)['TableNames']]" | \
+    fzf --prompt="table> " --height=40% --scheme=default)
+  [ -z "$selected" ] && exit 0
+  echo ">> counting $selected (scan, may take a while)..."
+  aws dynamodb scan --table-name "$selected" --select COUNT \
+    --query "Count" --output text | xargs -I{} echo "Count: {}"
+
+# hint: source_table: 복사할 원본 테이블
+# hint: new_table: 새로 만들 테이블 이름
+ddb-copy source_table new_table:
+  python3 "{{DDB_SCRIPT_DIR}}/create/copy_table.py" "{{source_table}}" "{{new_table}}" --execute
+
+# hint: source_table: 복사할 원본 테이블
+# hint: new_table: 새로 만들 테이블 이름
+# hint: limit: 복사할 최대 row 수 (default: 전체)
+ddb-copy-data source_table new_table limit="":
+  #!/usr/bin/env bash
+  set -euo pipefail
+  if [ -n "{{limit}}" ]; then
+    python3 "{{DDB_SCRIPT_DIR}}/create/copy_table.py" "{{source_table}}" "{{new_table}}" --data --limit "{{limit}}"
+  else
+    python3 "{{DDB_SCRIPT_DIR}}/create/copy_table.py" "{{source_table}}" "{{new_table}}" --data
+  fi
+
+# sysbench
+
+# hint: threads: concurrent threads (default: 4)
+# hint: time: test duration in seconds (default: 60)
+# hint: tables: number of test tables (default: 4)
+# hint: table_size: rows per table (default: 100000)
+# hint: db: target database/schema (default: sbtest)
+sysbench-prepare threads="4" tables="4" table_size="100000" db="sbtest":
+  #!/usr/bin/env bash
+  set -euo pipefail
+  HOSTS_FILE="{{HOSTS_FILE}}"
+  selected=$(grep -v '^#' "$HOSTS_FILE" | grep -v '^$' | \
+    fzf --prompt="sysbench host> " --height=40% --scheme=default)
+  [ -z "$selected" ] && exit 0
+  host=$(echo "$selected" | cut -d: -f2)
+  port=$(echo "$selected" | cut -d: -f3)
+  user=$(echo "$selected" | cut -d: -f4)
+  echo ">> prepare on $host (db={{db}}, tables={{tables}}, rows={{table_size}})"
+  sysbench oltp_read_write \
+    --db-driver=mysql \
+    --mysql-host="$host" \
+    --mysql-port="$port" \
+    --mysql-user="$user" \
+    --mysql-password \
+    --mysql-db="{{db}}" \
+    --tables={{tables}} \
+    --table-size={{table_size}} \
+    --threads={{threads}} \
+    prepare
+
+# hint: threads: concurrent threads (default: 4)
+# hint: time: test duration in seconds (default: 60)
+# hint: tables: number of test tables (default: 4)
+# hint: table_size: rows per table (default: 100000)
+# hint: db: target database/schema (default: sbtest)
+sysbench-run threads="4" time="60" tables="4" table_size="100000" db="sbtest":
+  #!/usr/bin/env bash
+  set -euo pipefail
+  HOSTS_FILE="{{HOSTS_FILE}}"
+  selected=$(grep -v '^#' "$HOSTS_FILE" | grep -v '^$' | \
+    fzf --prompt="sysbench host> " --height=40% --scheme=default)
+  [ -z "$selected" ] && exit 0
+  host=$(echo "$selected" | cut -d: -f2)
+  port=$(echo "$selected" | cut -d: -f3)
+  user=$(echo "$selected" | cut -d: -f4)
+  echo ">> run on $host (threads={{threads}}, time={{time}}s, db={{db}})"
+  sysbench oltp_read_write \
+    --db-driver=mysql \
+    --mysql-host="$host" \
+    --mysql-port="$port" \
+    --mysql-user="$user" \
+    --mysql-password \
+    --mysql-db="{{db}}" \
+    --tables={{tables}} \
+    --table-size={{table_size}} \
+    --threads={{threads}} \
+    --time={{time}} \
+    --report-interval=10 \
+    run
+
+# hint: db: target database/schema (default: sbtest)
+sysbench-cleanup db="sbtest":
+  #!/usr/bin/env bash
+  set -euo pipefail
+  HOSTS_FILE="{{HOSTS_FILE}}"
+  selected=$(grep -v '^#' "$HOSTS_FILE" | grep -v '^$' | \
+    fzf --prompt="sysbench host> " --height=40% --scheme=default)
+  [ -z "$selected" ] && exit 0
+  host=$(echo "$selected" | cut -d: -f2)
+  port=$(echo "$selected" | cut -d: -f3)
+  user=$(echo "$selected" | cut -d: -f4)
+  echo ">> cleanup on $host (db={{db}})"
+  sysbench oltp_read_write \
+    --db-driver=mysql \
+    --mysql-host="$host" \
+    --mysql-port="$port" \
+    --mysql-user="$user" \
+    --mysql-password \
+    --mysql-db="{{db}}" \
+    cleanup
 
 # AWS RDS
 
-aws-rds-list:
-  #!/usr/bin/env bash
-  set -euo pipefail
-  aws rds describe-db-clusters \
-    --query 'DBClusters[*].{Cluster:DBClusterIdentifier,Status:Status,Engine:Engine,Version:EngineVersion,Port:Port,Instances:length(DBClusterMembers),Writer:Endpoint,Reader:ReaderEndpoint}' \
-    --output json \
-    | python3 "$HOME/.config/mysql/rds_table.py"
+# aws-rds-list:
+#   python3 "$HOME/.config/mysql/rds_table.py" clusters
 
-aws-rds-instances:
-  #!/usr/bin/env bash
-  set -euo pipefail
-  aws rds describe-db-instances \
-    --query 'DBInstances[*].{Cluster:DBClusterIdentifier,Instance:DBInstanceIdentifier,Class:DBInstanceClass,Status:DBInstanceStatus,Engine:Engine,Version:EngineVersion,AZ:AvailabilityZone}' \
-    --output json \
-    | python3 "$HOME/.config/mysql/rds_table.py"
+aws-rds-list:
+  python3 "$HOME/.config/mysql/rds_table.py" instances
 
 # Aurora/RDS user migration
-SANITIZE_SCRIPT := "$HOME/.config/mysql/sanitize_users.py"
 
 # hint: source_host: e.g. aurora-dev.otg.apac.npr.aws.asurion.net
 # hint: source_user: e.g. giho.seong
@@ -280,3 +496,190 @@ mysql-binlog-extract-pos host user binlog start_position stop_position output=""
     "{{binlog}}" > "$out"
   echo "Written: $out"
   echo "Review $out, then run: mysql --host=<target> --user=<user> --password < $out"
+
+# AWS DMS
+
+DMS_CLI := "cd " + DMSCTL_ROOT + "/cli && uv run dms"
+
+# DMS 전체 상태 (diff 기반: AWS vs 코드)
+dms-status:
+  {{DMS_CLI}} status
+
+# hint: task: e.g. prod-finance / prod-dax-master (빈값이면 전체)
+# hint: source: dax / horizon / otg / soho (옵션)
+dms-diff task="" source="":
+  #!/usr/bin/env bash
+  set -euo pipefail
+  cd "$DMSCTL_ROOT/cli"
+  if [ -n "{{task}}" ] && [ -n "{{source}}" ]; then
+    uv run dms diff "{{task}}" --source "{{source}}"
+  elif [ -n "{{task}}" ]; then
+    uv run dms diff "{{task}}"
+  elif [ -n "{{source}}" ]; then
+    uv run dms diff --source "{{source}}"
+  else
+    uv run dms diff
+  fi
+
+# hint: task: e.g. prod-finance / all
+dms-sync task dry_run="true":
+  #!/usr/bin/env bash
+  set -euo pipefail
+  cd "$DMSCTL_ROOT/cli"
+  if [ "{{dry_run}}" = "true" ]; then
+    uv run dms sync {{task}} --dry-run
+  else
+    uv run dms sync {{task}} --force
+  fi
+
+# hint: target: e.g. prod-finance / horizon / all
+dms-deploy target plan="false":
+  #!/usr/bin/env bash
+  set -euo pipefail
+  cd "$DMSCTL_ROOT/cli"
+  if [ "{{plan}}" = "true" ]; then
+    uv run dms deploy {{target}} --plan
+  else
+    uv run dms deploy {{target}}
+  fi
+
+# hint: task: e.g. new-task-name
+# hint: source: dax / horizon / otg / soho
+# hint: tables: e.g. TABLE1,TABLE2 (또는 --from-aws 사용시 빈값)
+# hint: from_aws: 기존 AWS task ID에서 import (빈값이면 tables 사용)
+dms-generate task source tables="" from_aws="":
+  #!/usr/bin/env bash
+  set -euo pipefail
+  cd "$DMSCTL_ROOT/cli"
+  if [ -n "{{from_aws}}" ]; then
+    uv run dms generate "{{task}}" --source "{{source}}" --from-aws "{{from_aws}}"
+  else
+    uv run dms generate "{{task}}" --source "{{source}}" --tables "{{tables}}"
+  fi
+
+# hint: task: e.g. prod-finance
+# hint: table: e.g. NEW_TABLE
+dms-table-add task table:
+  {{DMS_CLI}} tables add "{{task}}" "{{table}}"
+
+# hint: task: e.g. prod-finance
+# hint: table: e.g. OLD_TABLE
+dms-table-remove task table:
+  {{DMS_CLI}} tables remove "{{task}}" "{{table}}"
+
+# hint: task: e.g. prod-finance
+dms-table-list task:
+  {{DMS_CLI}} tables list "{{task}}"
+
+# hint: task: e.g. prod-finance / all
+dms-stop task:
+  {{DMS_CLI}} task stop {{task}}
+
+# hint: task: e.g. prod-finance / all
+dms-resume task:
+  {{DMS_CLI}} task resume {{task}}
+
+# hint: task: e.g. prod-finance (빈값이면 전체)
+# hint: source: dax / horizon / otg / soho (옵션)
+dms-task-status task="" source="":
+  #!/usr/bin/env bash
+  set -euo pipefail
+  cd "$DMSCTL_ROOT/cli"
+  if [ -n "{{task}}" ] && [ -n "{{source}}" ]; then
+    uv run dms task status "{{task}}" --source "{{source}}"
+  elif [ -n "{{task}}" ]; then
+    uv run dms task status "{{task}}"
+  elif [ -n "{{source}}" ]; then
+    uv run dms task status --source "{{source}}"
+  else
+    uv run dms task status
+  fi
+
+# hint: task: e.g. prod-finance
+dms-table-status task:
+  {{DMS_CLI}} task table-status {{task}}
+
+# hint: source: dax / horizon / otg / soho (옵션, 빈값이면 전체)
+dms-stats source="":
+  #!/usr/bin/env bash
+  set -euo pipefail
+  cd "$DMSCTL_ROOT/cli"
+  if [ -n "{{source}}" ]; then
+    uv run dms task stats --source "{{source}}"
+  else
+    uv run dms task stats
+  fi
+
+dms-validate:
+  {{DMS_CLI}} validate
+
+# hint: source: dax / horizon / otg / soho (옵션, 빈값이면 전체)
+dms-clean source="":
+  #!/usr/bin/env bash
+  set -euo pipefail
+  cd "$DMSCTL_ROOT/cli"
+  if [ -n "{{source}}" ]; then
+    uv run dms clean --source "{{source}}"
+  else
+    uv run dms clean
+  fi
+
+# Docker
+
+# fzf로 실행 중인 컨테이너 선택 후 bash/sh 접속
+docker-exec:
+  #!/usr/bin/env bash
+  set -euo pipefail
+  selected=$(docker ps --format "{{{{.ID}}}}\t{{{{.Names}}}}\t{{{{.Image}}}}\t{{{{.Status}}}}" | \
+    fzf --prompt="container> " --height=40% --scheme=default | awk '{print $1}')
+  [ -z "$selected" ] && exit 0
+  shell=$(docker exec "$selected" sh -c 'command -v bash || command -v sh' 2>/dev/null || echo "sh")
+  docker exec -it "$selected" "$shell"
+
+# fzf로 컨테이너 선택 후 로그 tail
+# hint: lines: 출력할 로그 줄 수 (default: 100)
+docker-logs lines="100":
+  #!/usr/bin/env bash
+  set -euo pipefail
+  selected=$(docker ps -a --format "{{{{.ID}}}}\t{{{{.Names}}}}\t{{{{.Image}}}}\t{{{{.Status}}}}" | \
+    fzf --prompt="container> " --height=40% --scheme=default | awk '{print $1}')
+  [ -z "$selected" ] && exit 0
+  docker logs --tail={{lines}} -f "$selected"
+
+# 실행 중인 컨테이너 실시간 리소스 모니터링
+docker-stats:
+  docker stats $(docker ps --format "{{{{.Names}}}}" | tr '\n' ' ')
+
+# 안 쓰는 컨테이너/이미지/볼륨/네트워크 일괄 정리
+docker-clean:
+  #!/usr/bin/env bash
+  set -euo pipefail
+  echo ">> stopped containers"
+  docker container prune -f
+  echo ">> dangling images"
+  docker image prune -f
+  echo ">> unused volumes"
+  docker volume prune -f
+  echo ">> unused networks"
+  docker network prune -f
+  echo "done"
+
+# fzf로 컨테이너 선택 후 중지
+docker-stop:
+  #!/usr/bin/env bash
+  set -euo pipefail
+  selected=$(docker ps --format "{{{{.ID}}}}\t{{{{.Names}}}}\t{{{{.Image}}}}\t{{{{.Status}}}}" | \
+    fzf --prompt="stop container> " --height=40% --scheme=default --multi | awk '{print $1}')
+  [ -z "$selected" ] && exit 0
+  echo "$selected" | xargs docker stop
+  echo "stopped"
+
+# fzf로 이미지 선택 후 삭제
+docker-rmi:
+  #!/usr/bin/env bash
+  set -euo pipefail
+  selected=$(docker images --format "{{{{.Repository}}}}:{{{{.Tag}}}}\t{{{{.ID}}}}\t{{{{.Size}}}}" | \
+    fzf --prompt="remove image> " --height=40% --scheme=default --multi | awk '{print $2}')
+  [ -z "$selected" ] && exit 0
+  echo "$selected" | xargs docker rmi
+  echo "removed"

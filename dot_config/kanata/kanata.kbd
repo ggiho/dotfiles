@@ -33,7 +33,11 @@
   (j o) = 50 all-released ()
   (x c) M-c 50 all-released ()
   (c v) M-v 50 all-released ()
-  (m ,) caps 50 all-released ()
+  (j l) ' 50 all-released ()
+  (m k) S-- 50 all-released ()
+  (i o) ] 50 all-released ()
+  (u i) [ 50 all-released ()
+  (m ,) f18 50 all-released ()
 )
 
 (defalias
@@ -53,7 +57,7 @@
 
 (deflayer base
   brdn brup _ _ _ _ prev pp next mute vold volu
-  caps lctl @a_hrm @s_hrm @d_hrm @f_hrm g h @scln_hrm x c v ret f18 j k l i o m , .
+  caps lctl @a_hrm @s_hrm @d_hrm @f_hrm g h @scln_hrm x c v f18 f18 j k l i o m , .
 )
 
 (deflayer ctrl-nav

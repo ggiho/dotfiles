@@ -1,2 +1,5 @@
 # Local OMX runtime state
 .omx/
+
+# chezmoi-ignored generated files
+dot_config/nvim/lazy-lock.json

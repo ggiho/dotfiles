@@ -1,0 +1,4 @@
+{
+    "credentialStore.helper": "keychain",
+    "credentialStore.savePasswords": "always"
+}

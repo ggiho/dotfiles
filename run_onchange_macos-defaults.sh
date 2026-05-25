@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Key repeat
-defaults write -g InitialKeyRepeat -int 12
+defaults write -g InitialKeyRepeat -int 14
 defaults write -g KeyRepeat -int 3
 defaults write -g ApplePressAndHoldEnabled -bool false
 

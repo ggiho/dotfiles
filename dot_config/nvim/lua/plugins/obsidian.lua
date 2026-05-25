@@ -21,7 +21,7 @@ return {
 		workspaces = {
 			{
 				name = "sb",
-				path = "/Users/giho/Library/Mobile Documents/iCloud~md~obsidian/Documents/sb",
+				path = vim.fn.expand("~") .. "/Documents/Obsidian Vault",
 			},
 		},
 		notes_subdir = "inbox",
