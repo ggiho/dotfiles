@@ -58,6 +58,12 @@ defaults write -g AppleInterfaceStyle -string "Dark"
 defaults write com.apple.WindowManager StandardHideWidgets -bool true
 defaults write com.apple.WindowManager StageManagerHideWidgets -bool true
 
+# Universal Control
+# These keys are inverse flags: false means the corresponding Universal Control option is ON.
+defaults write com.apple.universalcontrol Disable -bool false
+defaults write com.apple.universalcontrol DisableCursorLocationAssistance -bool false
+defaults write com.apple.universalcontrol DisableAutoReconnect -bool false
+
 # Input source switch (F18)
 defaults write com.apple.symbolichotkeys AppleSymbolicHotKeys -dict-add 60 '
 <dict>
