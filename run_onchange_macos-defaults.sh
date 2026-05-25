@@ -54,6 +54,10 @@ defaults write com.apple.finder ShowStatusBar -bool false
 # Dark mode
 defaults write -g AppleInterfaceStyle -string "Dark"
 
+# Desktop widgets
+defaults write com.apple.WindowManager StandardHideWidgets -bool true
+defaults write com.apple.WindowManager StageManagerHideWidgets -bool true
+
 # Input source switch (F18)
 defaults write com.apple.symbolichotkeys AppleSymbolicHotKeys -dict-add 60 '
 <dict>
