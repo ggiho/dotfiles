@@ -28,6 +28,20 @@ xattr -c "$PLIST_DIR/local.kanata.plist" 2>/dev/null || true
 
 "$MANAGER" activate
 
+# Karabiner-Elements grabber(console_user_server 등)가 자동 실행되면 외장 키보드(예: Totem)를
+# 먼저 exclusive grab 하여 kanata가 device를 못 잡는다("doesn't match" / "in use").
+# kanata가 물리 키보드를 직접 잡는 구성이므로 grabber를 영구 비활성화한다.
+# VirtualHIDDevice 드라이버/daemon(org.pqrs.Karabiner-DriverKit-*)은 별도 패키지라 영향 없다.
+KB_USER="${SUDO_USER:-$(stat -f '%Su' /dev/console)}"
+KB_UID=$(id -u "$KB_USER")
+for svc in \
+  org.pqrs.service.agent.karabiner_console_user_server \
+  org.pqrs.service.agent.Karabiner-Core-Service-rev2 \
+  org.pqrs.service.agent.Karabiner-Core-Service; do
+  sudo -u "$KB_USER" launchctl disable "gui/$KB_UID/$svc" 2>/dev/null || true
+  sudo -u "$KB_USER" launchctl bootout  "gui/$KB_UID/$svc" 2>/dev/null || true
+done
+
 launchctl bootout "$KANATA_LABEL" 2>/dev/null || true
 launchctl bootout "$VHID_LABEL" 2>/dev/null || true
 

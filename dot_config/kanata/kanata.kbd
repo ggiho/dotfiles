@@ -14,8 +14,8 @@
 (defcfg
   process-unmapped-keys yes
   concurrent-tap-hold yes
-  macos-dev-names-include (
-    "Apple Internal Keyboard / Trackpad"
+  macos-dev-names-exclude (
+    "Karabiner DriverKit VirtualHIDKeyboard 1.8.0"
   )
 )
 
@@ -63,4 +63,13 @@
 (deflayer ctrl-nav
   _ _ _ _ _ _ _ _ _ _ _ _
   _ _ _ _ _ _ @nav_home @nav_left @nav_end _ _ _ _ _ @nav_down @nav_up @nav_rght i o m , .
+)
+
+;; Totem 등 a홀드를 ctrl로 보내는 외부 키보드용:
+;; ctrl + hjkl -> 방향키 (ctrl 제거하고 방향키만 출력)
+(defoverrides
+  (lctl h) (left)
+  (lctl j) (down)
+  (lctl k) (up)
+  (lctl l) (rght)
 )
