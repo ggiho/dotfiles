@@ -1,3 +1,6 @@
+# --- repo-only docs (reference, never applied to $HOME)
+docs/**
+
 # --- chezmoi self config (never track)
 .config/chezmoi/**
 

@@ -1,0 +1,75 @@
+<keymap version="1" name="macOS copy" parent="Mac OS X 10.5+">
+  <action id="AIAssistant.Editor.AskAiAssistantInEditor" />
+  <action id="ActivateServicesToolWindow">
+    <keyboard-shortcut first-keystroke="meta back_slash" />
+  </action>
+  <action id="Console.Jdbc.ExplainAnalyse">
+    <keyboard-shortcut first-keystroke="meta alt back_slash" />
+  </action>
+  <action id="Console.TableResult.EditValue">
+    <keyboard-shortcut first-keystroke="f2" />
+    <keyboard-shortcut first-keystroke="enter" />
+  </action>
+  <action id="Console.Toggle.Notebook.Mode">
+    <keyboard-shortcut first-keystroke="meta close_bracket" />
+  </action>
+  <action id="DatabaseView.OpenFamilyAction">
+    <keyboard-shortcut first-keystroke="f4" />
+  </action>
+  <action id="DatabaseView.Tools" />
+  <action id="EditSource">
+    <keyboard-shortcut first-keystroke="f4" />
+  </action>
+  <action id="EditorMoveToPageBottom">
+    <keyboard-shortcut first-keystroke="meta page_down" />
+    <keyboard-shortcut first-keystroke="meta down" />
+  </action>
+  <action id="EditorMoveToPageTop">
+    <keyboard-shortcut first-keystroke="meta page_up" />
+    <keyboard-shortcut first-keystroke="meta up" />
+  </action>
+  <action id="ExternalSystem.OpenConfig">
+    <keyboard-shortcut first-keystroke="f4" />
+  </action>
+  <action id="FileChooserList.LevelUp" />
+  <action id="Forward">
+    <keyboard-shortcut first-keystroke="meta alt right" />
+    <mouse-shortcut keystroke="button5" />
+  </action>
+  <action id="Jdbc.OpenEditor.Data">
+    <keyboard-shortcut first-keystroke="f4" />
+  </action>
+  <action id="NavBar-navigate">
+    <keyboard-shortcut first-keystroke="f4" />
+  </action>
+  <action id="OpenBookmarkGroup">
+    <keyboard-shortcut first-keystroke="f4" />
+  </action>
+  <action id="ProblemsView.QuickFixes" />
+  <action id="ProjectViewEditSource">
+    <keyboard-shortcut first-keystroke="f4" />
+  </action>
+  <action id="QuickEvaluateExpression">
+    <keyboard-shortcut first-keystroke="meta alt f8" />
+    <mouse-shortcut keystroke="alt button1" />
+    <keyboard-shortcut first-keystroke="alt enter" />
+  </action>
+  <action id="SearchEverywhere.NavigateToNextGroup">
+    <keyboard-shortcut first-keystroke="page_down" />
+  </action>
+  <action id="SearchEverywhere.NavigateToPrevGroup">
+    <keyboard-shortcut first-keystroke="page_up" />
+  </action>
+  <action id="SetShortcutAction" />
+  <action id="ShowIntentionActions" />
+  <action id="ShowNavBar">
+    <keyboard-shortcut first-keystroke="alt home" />
+  </action>
+  <action id="Sql.EditParameter">
+    <keyboard-shortcut first-keystroke="f4" />
+  </action>
+  <action id="Terminal.GenerateCommandFromText" />
+  <action id="Terminal.SwitchFocusToEditor">
+    <keyboard-shortcut first-keystroke="shift ctrl meta alt back_slash" />
+  </action>
+</keymap>

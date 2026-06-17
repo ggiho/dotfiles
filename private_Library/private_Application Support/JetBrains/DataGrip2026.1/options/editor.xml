@@ -1,0 +1,16 @@
+<application>
+  <component name="CodeInsightSettings">
+    <option name="REFORMAT_ON_PASTE" value="1" />
+  </component>
+  <component name="DeclarativeInlayHintsSettings">
+    <option name="providerIdToEnabled">
+      <map>
+        <entry key="sql.column.names.inlay.hints" value="true" />
+        <entry key="sql.join.cardinality.hints" value="true" />
+      </map>
+    </option>
+  </component>
+  <component name="InlineCompletionOnboarding">
+    <option name="onboardingFinished" value="true" />
+  </component>
+</application>

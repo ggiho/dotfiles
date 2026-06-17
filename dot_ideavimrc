@@ -1,0 +1,89 @@
+" .ideavimrc is a configuration file for IdeaVim plugin. It uses
+"   the same commands as the original .vimrc configuration.
+" You can find a list of commands here: https://jb.gg/h38q75
+" Find more examples here: https://jb.gg/share-ideavimrc
+
+let mapleader=" "
+
+"" -- Suggested options --
+" Show a few lines of context around the cursor. Note that this makes the
+" text scroll if you mouse-click near the start or end of the window.
+set scrolloff=8
+
+" Do incremental searching.
+set incsearch
+set surround
+set which-key
+
+" Don't use Ex mode. (nvim parity: Q is disabled below)
+" map Q gq
+
+" --- Enable IdeaVim plugins https://jb.gg/ideavim-plugins
+
+" Highlight copied text
+Plug 'machakann/vim-highlightedyank'
+" Commentary plugin
+Plug 'tpope/vim-commentary'
+
+
+"" -- Map IDE actions to IdeaVim -- https://jb.gg/abva4t
+"" Map \r to the Reformat Code action
+"map \r <Action>(ReformatCode)
+
+"" Map <leader>d to start debug
+"map <leader>d <Action>(Debug)
+
+"" Map \b to toggle the breakpoint on the current line
+"map \b <Action>(ToggleLineBreakpoint)
+
+
+" =====================================================================
+"  Ported from Neovim config (~/.config/nvim)
+" =====================================================================
+
+"" -- Options (match nvim options.lua) --
+set relativenumber
+set number
+set ignorecase
+set smartcase
+set clipboard+=unnamedplus
+
+"" -- Quality-of-life maps (nvim keymaps.lua) --
+nnoremap <leader>nh :nohl<CR>
+nnoremap <C-d> <C-d>zz
+nnoremap <C-u> <C-u>zz
+nnoremap n nzzzv
+nnoremap N Nzzzv
+nnoremap J mzJ`z
+vnoremap < <gv
+vnoremap > >gv
+nnoremap <leader>w :w<CR>
+nnoremap <leader>wq :wq<CR>
+nnoremap <leader>q :q!<CR>
+nnoremap Q <nop>
+inoremap lk <ESC>
+
+"" -- Black-hole register (don't clobber clipboard, like nvim) --
+xnoremap <leader>p "_dP
+nnoremap <leader>d "_d
+vnoremap <leader>d "_d
+nnoremap x "_x
+
+"" -- nvim plugins -> IntelliJ actions --
+"" NOTE: <Action> works only with map/nmap/vmap, NOT *noremap
+"" NOTE: no trailing comments on :map lines (they'd become part of the rhs)
+" Telescope find_files
+nmap <leader>ff <Action>(GotoFile)
+" Telescope live_grep
+nmap <leader>fg <Action>(FindInPath)
+" Telescope oldfiles
+nmap <leader>fr <Action>(RecentFiles)
+" Telescope buffers
+nmap <leader>fb <Action>(Switcher)
+" Telescope commands
+nmap <leader>fc <Action>(GotoAction)
+" nvim-tree toggle
+nmap <leader>e <Action>(ActivateProjectToolWindow)
+" visual move lines
+vmap J <Action>(MoveLineDown)
+vmap K <Action>(MoveLineUp)

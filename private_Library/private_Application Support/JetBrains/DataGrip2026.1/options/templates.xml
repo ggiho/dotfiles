@@ -1,0 +1,16 @@
+<application>
+  <component name="TemplateSettings">
+    <option name="deletedKeys">
+      <list>
+        <TemplateKey>
+          <option name="groupName" value="SQL" />
+          <option name="key" value="del" />
+        </TemplateKey>
+        <TemplateKey>
+          <option name="groupName" value="SQL" />
+          <option name="key" value="col" />
+        </TemplateKey>
+      </list>
+    </option>
+  </component>
+</application>
