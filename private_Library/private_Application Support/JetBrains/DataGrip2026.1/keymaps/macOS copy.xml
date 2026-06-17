@@ -2,6 +2,7 @@
   <action id="AIAssistant.Editor.AskAiAssistantInEditor" />
   <action id="ActivateServicesToolWindow">
     <keyboard-shortcut first-keystroke="meta back_slash" />
+    <keyboard-shortcut first-keystroke="meta 8" />
   </action>
   <action id="Console.Jdbc.ExplainAnalyse">
     <keyboard-shortcut first-keystroke="meta alt back_slash" />
