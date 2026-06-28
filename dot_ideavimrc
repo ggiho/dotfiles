@@ -46,9 +46,9 @@ set relativenumber
 set number
 set ignorecase
 set smartcase
-" NOTE: do NOT use clipboard+=unnamedplus in IdeaVim — it routes change/delete
-" to the system clipboard unreliably. Instead, yank/paste use the explicit
-" + register below, so c/s/d/x never touch the clipboard.
+" Share yank AND delete(cut) with the system clipboard (nvim parity).
+" Only change/substitute is excluded below, so c/s don't clobber it.
+set clipboard+=unnamedplus
 
 "" -- Quality-of-life maps (nvim keymaps.lua) --
 nnoremap <leader>nh :nohl<CR>
@@ -65,17 +65,15 @@ nnoremap <leader>q :q!<CR>
 nnoremap Q <nop>
 inoremap lk <ESC>
 
-"" -- Clipboard: only yank/paste use system clipboard (+) --
-"" c / s / d / x stay in vim's internal registers, so they never clobber it.
-nnoremap y "+y
-xnoremap y "+y
-nnoremap Y "+y$
-nnoremap p "+p
-nnoremap P "+P
-" visual paste from clipboard without overwriting it (P keeps the register)
-xnoremap p "+P
+"" -- Clipboard: yank + delete(cut) share clipboard via unnamedplus above.
+"" Only change/substitute go to the black hole so they DON'T clobber it.
+nnoremap c "_c
+xnoremap c "_c
+nnoremap C "_C
+nnoremap s "_s
+nnoremap S "_S
 
-" delete without yanking (nvim parity)
+" delete without yanking at all (to void) — distinct from plain d (cut)
 xnoremap <leader>p "_dP
 nnoremap <leader>d "_d
 vnoremap <leader>d "_d
