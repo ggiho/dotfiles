@@ -23,6 +23,7 @@ alias ob="obsidian"
 alias cc="claude --dangerously-skip-permissions"
 alias pgcli="~/.local/bin/pgcli"
 alias asurion_claude_login="/Users/giho.seong/.claude/claude_login.sh"
+alias lg="lazygit"
 
 function yz() {
   local tmp cwd
@@ -91,12 +92,48 @@ j() {
   local hosts_file="$HOME/.config/mysql/hosts"
   local selected_user=""
 
-  selected=$(just --list --justfile "$JUSTFILE" --list-heading='' --list-prefix='' | fzf --prompt="just> " --height=40%)
+  # ── Parse module declarations: `mod NAME 'PATH'` ──
+  local -a mod_names mod_paths
+  local _ml
+  while IFS= read -r _ml; do
+    if [[ "$_ml" =~ '^[[:space:]]*mod[[:space:]]+([A-Za-z0-9_-]+)[[:space:]]+["'\'']([^"'\'']+)["'\'']' ]]; then
+      mod_names+=("${match[1]}")
+      mod_paths+=("${match[2]}")
+    fi
+  done < "$JUSTFILE"
+
+  # ── Build combined recipe list (top-level + module recipes, prefixed) ──
+  local list_out mi mname
+  list_out=$(just --list --justfile "$JUSTFILE" --list-heading='' --list-prefix='' 2>/dev/null)
+  for (( mi = 1; mi <= ${#mod_names[@]}; mi++ )); do
+    mname="${mod_names[$mi]}"
+    list_out=$(printf '%s\n' "$list_out" | grep -vE "^[[:space:]]*${mname} \.\.\.")
+    list_out="${list_out}"$'\n'"$(just --justfile "$JUSTFILE" --list "$mname" --list-heading='' --list-prefix='' 2>/dev/null | sed "s/^[[:space:]]*/${mname} /")"
+  done
+
+  selected=$(printf '%s\n' "$list_out" | sed '/^[[:space:]]*$/d' | fzf --prompt="just> " --height=40%)
   [ -z "$selected" ] && return
 
-  recipe=$(echo "$selected" | sed 's/^[[:space:]]*//' | awk '{print $1}')
+  # ── Detect module vs top-level recipe ──
+  local first_tok src_file invoke_prefix is_mod=0
+  first_tok=$(echo "$selected" | sed 's/^[[:space:]]*//' | awk '{print $1}')
+  src_file="$JUSTFILE"
+  invoke_prefix=""
+  for (( mi = 1; mi <= ${#mod_names[@]}; mi++ )); do
+    if [[ "$first_tok" == "${mod_names[$mi]}" ]]; then
+      is_mod=1
+      invoke_prefix="${mod_names[$mi]}"
+      src_file="${mod_paths[$mi]}"
+      break
+    fi
+  done
 
-  just_lines=("${(@f)$(<"$JUSTFILE")}")
+  # ── Recipe signature (strip module prefix when present) ──
+  sig=$(echo "$selected" | sed 's/#.*//' | sed 's/^[[:space:]]*//' | sed 's/[[:space:]]*$//')
+  (( is_mod )) && sig="${sig#${invoke_prefix} }"
+  recipe=$(echo "$sig" | awk '{print $1}')
+
+  just_lines=("${(@f)$(<"$src_file")}")
   local i j
   for (( i = 1; i <= ${#just_lines[@]}; i++ )); do
     line=${just_lines[$i]}
@@ -108,18 +145,19 @@ j() {
           continue
         fi
         [[ -z "${line//[[:space:]]/}" ]] && continue
+        [[ "$line" == '#'* ]] && continue
         break
       done
       break
     fi
   done
 
-  sig=$(echo "$selected" | sed 's/#.*//' | sed 's/^ *//')
   rest="${sig#${recipe}}"
   rest="${rest# }"
   params=()
   [[ -n "$rest" ]] && params=("${(z)rest}")
 
+  local default_user=""
   if [[ -f "$hosts_file" ]]; then
     local _line _label _host _user
     while IFS= read -r _line; do
@@ -132,6 +170,7 @@ j() {
       db_hosts+=("$_host")
       db_users+=("$_user")
       host_options+=("${_label}  →  ${_host}")
+      [[ -z "$default_user" ]] && default_user="$_user"
     done < "$hosts_file"
   fi
 
@@ -146,25 +185,42 @@ j() {
     fi
 
     if [[ "$name" == *host* && ${#host_options[@]} -gt 0 ]]; then
-      fzf_selected=$(printf '%s\n' "${host_options[@]}" | fzf --prompt="$name> " --height=40%)
-      if [[ -n "$fzf_selected" ]]; then
+      local _q="" _sel="" _out=""
+      _out=$(printf '%s\n' "${host_options[@]}" \
+        | fzf --prompt="$name> " --height=40% --print-query)
+      if [[ "$_out" == *$'\n'* ]]; then
+        _q="${_out%%$'\n'*}"
+        _sel="${_out#*$'\n'}"
+      else
+        _q="$_out"
+        _sel=""
+      fi
+      if [[ -n "$_sel" ]]; then
         local matched=0 idx
         for (( idx = 1; idx <= ${#host_options[@]}; idx++ )); do
-          if [[ "${host_options[$idx]}" == "$fzf_selected" ]]; then
+          if [[ "${host_options[$idx]}" == "$_sel" ]]; then
             val="${db_hosts[$idx]}"
             selected_user="${db_users[$idx]}"
             matched=1
-            echo "$name: $val"
             break
           fi
         done
-        (( matched )) || vared -p "$name: " val
+        (( matched )) || val="$_sel"
+        echo "$name: $val"
+      elif [[ -n "$_q" ]]; then
+        # typed a host not in the list -> use it as-is (user falls back to default_user)
+        val="$_q"
+        echo "$name: $val"
       else
         vared -p "$name: " val
       fi
     else
-      if [[ "$name" == *user* && -n "$selected_user" ]]; then
-        default="$selected_user"
+      if [[ "$name" == *user* ]]; then
+        if [[ -n "$selected_user" ]]; then
+          default="$selected_user"
+        elif [[ -n "$default_user" ]]; then
+          default="$default_user"
+        fi
       fi
 
       if [[ -n "${hints[$name]-}" && -n "$default" ]]; then
@@ -185,7 +241,21 @@ j() {
     val=""
   done
 
-  dry=$(just --dry-run --justfile "$JUSTFILE" --working-directory "$PWD" "$recipe" "${args[@]}" 2>&1) || {
+  # ── Resolve execution context ──
+  # Module recipes are dry-run against their OWN justfile (so justfile_directory()
+  # resolves correctly) and prefixed with a `cd` into the module dir so relative
+  # paths and `terraform` run in the right place from anywhere.
+  local _jf _wd _cdpfx=""
+  if (( is_mod )); then
+    _jf="$src_file"
+    _wd="${src_file:h}"
+    _cdpfx="cd ${(q)_wd} && "
+  else
+    _jf="$JUSTFILE"
+    _wd="$PWD"
+  fi
+
+  dry=$(just --dry-run --justfile "$_jf" --working-directory "$_wd" "$recipe" "${args[@]}" 2>&1) || {
     print -u2 -- "$dry"
     return 1
   }
@@ -198,7 +268,7 @@ text = re.sub(r"\\\n\s*", " ", text).rstrip()
 print(text, end="")')
 
   local quoted_cmd
-  quoted_cmd=$(printf '%s' "$cmd" | python3 -c 'import shlex, sys; print(shlex.quote(sys.stdin.read()))')
+  quoted_cmd=$(printf '%s' "${_cdpfx}${cmd}" | python3 -c 'import shlex, sys; print(shlex.quote(sys.stdin.read()))')
 
   print -z "bash -lc $quoted_cmd"
 }

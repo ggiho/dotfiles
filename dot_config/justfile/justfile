@@ -5,6 +5,11 @@ DDB_SCRIPT_DIR  := env_var_or_default("DDB_SCRIPT_DIR", env_var("HOME") + "/10_D
 DMSCTL_ROOT     := env_var_or_default("DMSCTL_ROOT", env_var("HOME") + "/20_Work/01_Asurion/scripts/aws/dms")
 # ──────────────────────────────────────────────────────────────────────────────
 
+# ── Modules ───────────────────────────────────────────────────────────────────
+# RDS/Aurora parameter group + cluster management (use: just rds <recipe>)
+mod rds '/Users/giho.seong/10_Database/AWS/rds/terraform/justfile'
+# ──────────────────────────────────────────────────────────────────────────────
+
 # [deprecated: use mysqlsh-dump-data instead]
 # hint: host: e.g. aurora-dev.otg.apac.npr.aws.asurion.net
 # hint: user: e.g. giho.seong
@@ -141,8 +146,9 @@ mysqlsh-dump-no-data host user database="" threads="4" outdir="":
 # hint: indir: dump directory from mysqlsh-dump-data
 # hint: threads: parallel threads (default: 4)
 # hint: target_schema: optional schema to load into; leave empty to use dump schema
+# hint: on_exist: existing objects -> error (default) | drop (drop & reload) | ignore (skip)
 
-mysqlsh-load host user indir threads="4" target_schema="":
+mysqlsh-load host user indir threads="4" target_schema="" on_exist="error":
   #!/usr/bin/env bash
   set -euo pipefail
 
@@ -152,6 +158,13 @@ mysqlsh-load host user indir threads="4" target_schema="":
     -- util load-dump "{{indir}}"
     --threads={{threads}}
   )
+
+  case "{{on_exist}}" in
+    drop)     load_args+=(--dropExistingObjects=true) ;;
+    ignore)   load_args+=(--ignoreExistingObjects=true) ;;
+    error|"") ;;
+    *) echo "on_exist must be one of: error | drop | ignore" >&2; exit 1 ;;
+  esac
 
   if [ -n "$target_schema" ]; then
     safe_schema=$(printf '%s' "$target_schema" | tr -c 'A-Za-z0-9_.-' '_')
@@ -349,6 +362,31 @@ sysbench-cleanup db="sbtest":
 
 aws-rds-list:
   python3 "$HOME/.config/mysql/rds_table.py" instances
+
+# hint: pg: cluster parameter group name (e.g. webfulfillment-mdb-prod-80-cg)
+# hint: region: AWS region (default: ap-northeast-2)
+#
+# Zero-ETL (Aurora MySQL -> Redshift) 필수 cluster 파라미터 세팅.
+# aurora_enhanced_binlog / binlog_backup / binlog_replication_globaldb 는 static ->
+# 적용하려면 writer 인스턴스 재부팅 필요. AWS_PROFILE 을 미리 export 해두고 실행.
+
+rds-zeroetl-params pg region="ap-northeast-2":
+  #!/usr/bin/env bash
+  set -euo pipefail
+  echo ">> Applying zero-ETL cluster params to: {{pg}} ({{region}})"
+  aws rds modify-db-cluster-parameter-group \
+    --region "{{region}}" \
+    --db-cluster-parameter-group-name "{{pg}}" \
+    --parameters \
+      "ParameterName=aurora_enhanced_binlog,ParameterValue=1,ApplyMethod=pending-reboot" \
+      "ParameterName=binlog_backup,ParameterValue=0,ApplyMethod=pending-reboot" \
+      "ParameterName=binlog_replication_globaldb,ParameterValue=0,ApplyMethod=pending-reboot" \
+      "ParameterName=binlog_format,ParameterValue=ROW,ApplyMethod=pending-reboot" \
+      "ParameterName=binlog_row_image,ParameterValue=full,ApplyMethod=immediate" \
+      "ParameterName=binlog_row_metadata,ParameterValue=full,ApplyMethod=immediate"
+  echo ""
+  echo "Done. static 파라미터 3개는 writer 재부팅 후 적용됩니다:"
+  echo "  aws rds reboot-db-instance --region {{region}} --db-instance-identifier <writer-instance>"
 
 # Aurora/RDS user migration
 
