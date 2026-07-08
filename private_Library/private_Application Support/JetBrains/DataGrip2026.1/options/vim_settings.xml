@@ -93,6 +93,7 @@
       <idea-put enabled="false" />
       <was-automatically-subscribed-to-eap enabled="false" />
       <first-ideavim-version value="2.28.0" />
+      <last-ideavim-version value="2.42.0" />
     </notifications>
   </component>
 </application>
