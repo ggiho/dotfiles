@@ -20,6 +20,17 @@ assert(has_insert_map("<C-Space>"), "manual completion mapping is missing")
 assert(has_insert_map("<Tab>"), "completion/snippet Tab mapping is missing")
 assert(has_insert_map("<CR>"), "completion confirmation mapping is missing")
 
+-- lua_ls only autostarts for a real Lua buffer, so open one before waiting.
+if vim.fn.executable("lua-language-server") == 0 then
+	print("native completion smoke checks skipped (lua-language-server not installed)")
+	return
+end
+
+local scratch = vim.fs.joinpath(vim.fn.stdpath("run"), "nvim-native-smoke.lua")
+vim.fn.writefile({ "return vim.api" }, scratch)
+vim.cmd.edit(scratch)
+vim.bo.filetype = "lua"
+
 local attached = vim.wait(10000, function()
 	return #vim.lsp.get_clients({ bufnr = 0, name = "lua_ls" }) > 0
 end, 50)
