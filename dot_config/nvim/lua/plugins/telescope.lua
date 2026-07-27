@@ -4,19 +4,30 @@ return {
 		branch = "master",
 		cmd = "Telescope",
 		keys = {
+			{ "<leader><leader>", "<cmd>Telescope buffers<cr>", desc = "Find buffers" },
+			{
+				"<leader>/",
+				function()
+					require("telescope.builtin").current_buffer_fuzzy_find(
+						require("telescope.themes").get_dropdown({ previewer = false })
+					)
+				end,
+				desc = "Find in current buffer",
+			},
 			{ "<leader>ff", "<cmd>Telescope find_files<cr>", desc = "Find files" },
 			{ "<leader>fg", "<cmd>Telescope live_grep<cr>", desc = "Live grep" },
 			{ "<leader>fr", "<cmd>Telescope oldfiles<cr>", desc = "Recent files" },
-			{ "<leader>fb", "<cmd>Telescope buffers<cr>", desc = "Find buffer" },
+			{ "<leader>fb", "<cmd>Telescope buffers<cr>", desc = "Find buffers" },
+			{ "<leader>fd", "<cmd>Telescope diagnostics<cr>", desc = "Find diagnostics" },
 			{ "<leader>fh", "<cmd>Telescope help_tags<cr>", desc = "Help tags" },
+			{ "<leader>fk", "<cmd>Telescope keymaps<cr>", desc = "Find keymaps" },
 			{ "<leader>fc", "<cmd>Telescope commands<cr>", desc = "Commands" },
 			{
 				"<leader>fw",
 				function()
-					local word = vim.fn.expand("<cWORD>")
-					require("telescope.builtin").grep_string({ search = word })
+					require("telescope.builtin").grep_string()
 				end,
-				desc = "Grep Connected Words under cursor",
+				desc = "Grep word under cursor",
 			},
 		},
 		dependencies = {
@@ -32,12 +43,10 @@ return {
 				defaults = {
 					layout_strategy = "vertical",
 					layout_config = {
-						preview_height = 0.7,
+						width = 0.95,
+						height = 0.95,
 						vertical = {
-							size = {
-								width = "95%",
-								height = "95%",
-							},
+							preview_height = 0.7,
 						},
 					},
 				},
@@ -46,7 +55,7 @@ return {
 				},
 			})
 			telescope.load_extension("ui-select")
-			telescope.load_extension("fzf") -- fzf-native도 로드해주면 좋아
+			telescope.load_extension("fzf")
 		end,
 	},
 }

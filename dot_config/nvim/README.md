@@ -1,147 +1,116 @@
 # Neovim Configuration
 
-현대적인 Neovim 설정으로 Lua와 lazy.nvim 패키지 매니저를 사용합니다.
+Neovim 0.12, native LSP, Treesitter, `lazy.nvim`을 사용하는 개인 설정입니다. Seth의
+`vim.pack` 실험 설정에서 편집 워크플로는 가져오되, 메인 플러그인 관리자는 안정적인
+`lazy.nvim`으로 유지합니다.
 
-## 🚀 주요 특징
+## 키를 찾는 방법
 
-- **완전한 Lua 설정**: 성능 향상을 위해 Lua로 작성
-- **Lazy Loading**: 빠른 시작을 위한 지연 로딩
-- **LSP 지원**: 여러 프로그래밍 언어 지원
-- **자동 포맷팅**: 저장 시 자동 코드 포맷팅
-- **아름다운 UI**: Catppuccin 테마와 투명 배경
-- **생산성 도구**: 파일 탐색기, 퍼지 파인더, 자동 완성
+| 키 | 동작 |
+| --- | --- |
+| `<leader>`를 누르고 잠시 대기 | `mini.clue`로 현재 가능한 키 확인 |
+| `<leader>fk` | 전체 키맵 검색 |
+| `<leader>fh` | Neovim 도움말 검색 |
+| `g`, `[`, `]`, `<C-w>`를 누르고 대기 | 해당 기본 키 계열 확인 |
 
-## 📁 디렉토리 구조
+리더 키는 `Space`입니다.
 
-```
-~/.config/nvim/
-├── init.lua              # 메인 진입점
-├── lua/
-│   ├── core/
-│   │   ├── init.lua      # 코어 모듈 로더
-│   │   ├── options.lua   # 에디터 옵션
-│   │   ├── keymaps.lua   # 키 매핑
-│   │   └── lsp.lua       # LSP 설정
-│   ├── lazy.lua          # 패키지 매니저 설정
-│   └── plugins/          # 플러그인 설정들
-└── lsp/                  # LSP 서버 설정들
-```
+## 매일 쓰는 키
 
-## ⌨️ 핵심 키 매핑
+### 찾기와 파일
 
-**리더 키**: `Space`
+| 키 | 동작 |
+| --- | --- |
+| `<leader>ff` | 파일 찾기 |
+| `<leader>fg` | 프로젝트 전체 문자열 검색 |
+| `<leader>fr` | 최근 파일 |
+| `<leader>fb` | 열린 버퍼 찾기 |
+| `<leader>fd` | 진단 목록 찾기 |
+| `<leader>/` | 현재 버퍼 안에서 찾기 |
+| `<leader>e` | 현재 파일 위치에서 `mini.files` 열기 |
+| `<leader>E` | 작업 디렉터리에서 `mini.files` 열기 |
 
-### 네비게이션
-- `lk` (Insert 모드): Normal 모드로 전환
-- `J`/`K` (Visual 모드): 선택한 라인 위/아래로 이동
-- `<C-d>`/`<C-u>`: 페이지 이동 (커서 중앙 유지)
-- `<leader>nh`: 검색 하이라이트 제거
+`mini.files` 안에서는 `h/l`로 상위/하위 이동, `=`로 파일 작업 적용, `g?`로 도움말을
+확인합니다. 삭제는 즉시 영구 삭제하지 않고 mini 전용 휴지통으로 이동합니다.
 
-### 창 관리
-- `<leader>sv`: 수직 분할
-- `<leader>sh`: 수평 분할
-- `<leader>se`: 창 크기 균등화
-- `<leader>sx`: 현재 창 닫기
+### 코드 이동과 LSP
 
-### 파일 탐색
-- `<leader>e`: 파일 탐색기 토글
-- `<leader>ff`: 파일 찾기 (Telescope)
-- `<leader>fs`: 텍스트 검색
-- `<leader>fr`: 최근 파일
+Neovim 0.12 기본 LSP 키를 우선 사용합니다.
 
-## 🎨 플러그인 목록
+| 키 | 동작 |
+| --- | --- |
+| `gd` / `gD` | 정의 / 선언으로 이동 |
+| `K` | hover 문서 |
+| `grr` | 참조 찾기 |
+| `gri` | 구현 찾기 |
+| `grn` | 이름 변경 |
+| `gra` | 코드 액션 |
+| `gO` | 문서 심볼 |
+| `<leader>ls` | 워크스페이스 심볼 검색 |
+| `gl` | 현재 진단 보기 |
+| `[d` / `]d` | 이전 / 다음 진단 |
+| `<leader>lq` | 진단을 location list로 열기 |
+| `<leader>lh` | inlay hint 토글 |
+| `<leader>lf` | 파일 또는 선택 영역 포맷 |
+| `<leader>ll` | 현재 파일 lint 실행 |
 
-### UI & 테마
-- **catppuccin**: 모던한 파스텔 테마
-- **lualine.nvim**: 커스텀 상태바
-- **nvim-tree.lua**: 파일 탐색기
-- **noice.nvim**: 향상된 UI 요소
-- **dressing.nvim**: 더 나은 UI 선택 창
+### 편집과 Git
 
-### 코드 편집
-- **nvim-treesitter**: 구문 하이라이팅
-- **nvim-cmp**: 자동 완성
-- **LuaSnip**: 스니펫 엔진
-- **nvim-autopairs**: 자동 괄호 닫기
-- **mini.nvim**: 주석, 서라운드, 공백 관리 등
+| 키 | 동작 |
+| --- | --- |
+| `gc` + motion | 주석 토글 |
+| `sa` / `sd` / `sr` | surrounding 추가 / 삭제 / 교체 |
+| `gS` | 인자 목록 split/join |
+| `<leader>gs` / `<leader>gr` | 현재 Git hunk stage / reset |
+| `gh` / `gH` + motion | 선택 범위 Git hunk stage / reset |
+| `[h` / `]h` | 이전 / 다음 Git hunk |
+| `<leader>go` | 현재 버퍼 Git diff overlay |
+| `<leader>cw` | trailing whitespace 정리 |
+| Visual `J` / `K` | 선택한 줄 이동 |
+| Visual `p` | 기존 yank를 보존하며 붙여넣기 |
 
-### 개발 도구
-- **telescope.nvim**: 퍼지 파인더
-- **conform.nvim**: 코드 포맷터
-- **nvim-lint**: 린터
-- **todo-comments.nvim**: TODO 하이라이트
+`mini.ai`는 `a`/`i` text object를 확장합니다. 예를 들어 `daf`는 함수 전체 삭제,
+`cia`는 함수 인자 변경에 사용할 수 있습니다.
 
-### LSP & 언어 지원
-- **mason.nvim**: LSP 서버 관리
-- **mason-lspconfig.nvim**: LSP 자동 설정
-- 지원 언어: Lua, TypeScript/JavaScript, Python, HTML, C/C++
+### 버퍼와 창
 
-## 🛠️ LSP 서버
+| 키 | 동작 |
+| --- | --- |
+| `[b` / `]b` | 이전 / 다음 버퍼 |
+| `<leader>bb` | 직전 버퍼 |
+| `<leader>bd` / `<leader>bD` | 버퍼 안전 삭제 / 강제 삭제 |
+| `<C-h/j/k/l>` | Neovim 창과 tmux pane 사이 이동 |
+| `<C-w>`를 누르고 대기 | 분할, 크기 조정, 창 닫기 키 확인 |
 
-| 언어 | 서버 | 포맷터 | 린터 |
-|------|------|--------|------|
-| Lua | lua_ls | stylua | luacheck |
-| TypeScript/JavaScript | ts_ls | prettier | eslint_d |
-| Python | ruff | ruff | ruff |
-| HTML/CSS | html | prettier | - |
-| C/C++ | clangd | clang-format | cppcheck |
+### 기본 작업
 
-## 📦 설치된 플러그인 상세
+| 키 | 동작 |
+| --- | --- |
+| `lk` | Insert 모드 종료 |
+| `<leader>nh` | 검색 하이라이트 제거 |
+| `<leader>w` / `<leader>q` | 저장 / 변경사항을 버리고 현재 창 종료 |
+| `<leader>re` | Neovim 재시작 |
+| `<leader>fp` | 현재 파일의 상대 경로 복사 |
+| `<leader>s` | 커서 아래 단어를 버퍼 전체에서 치환 |
 
-### 자동 완성 (nvim-cmp)
-- LSP, 버퍼, 경로, 스니펫 소스
-- 스마트 Tab/Backspace
-- Ghost text 지원
-- Tailwind CSS 색상 미리보기
+## 변경된 기존 키
 
-### 파일 탐색기 (nvim-tree)
-- `<leader>e`: 토글
-- `<leader>;`: 포커스 전환
-- 상대 줄 번호 표시
-- .DS_Store 파일 숨김
+| 기존 | 현재 |
+| --- | --- |
+| `<leader>n` / `<leader>p` | `]b` / `[b` |
+| `<leader>bm` | `<leader>bb` |
+| `<leader>mp` | `<leader>lf` |
+| `<leader>l` (lint) | `<leader>ll` |
+| `<leader>f` (LSP format) | `<leader>lf` |
+| `<leader>rn` / `<leader>ca` | Neovim 기본 `grn` / `gra` |
+| `<leader>ds` / `<leader>ws` | Neovim 기본 `gO` / `<leader>ls` |
+| `nvim-tree` | `mini.files` (`<leader>e`) |
 
-### 퍼지 파인더 (Telescope)
-- 파일, 텍스트, Git 검색
-- FZF 네이티브 확장
-- TODO 코멘트 통합
+기본 `c`, `x`, `d`의 레지스터 동작은 더 이상 덮어쓰지 않습니다.
 
-### 포맷팅 (conform.nvim)
-- 저장 시 자동 포맷팅
-- `<leader>mp`: 수동 포맷팅
-- 언어별 포맷터 설정
+## 관리
 
-### 린팅 (nvim-lint)
-- 실시간 오류 검사
-- `<leader>l`: 수동 린팅
-- 100KB 이상 파일 스킵
-
-## 🔧 설정 커스터마이징
-
-### 새 플러그인 추가
-`lua/plugins/` 디렉토리에 새 파일을 만들어 플러그인을 추가할 수 있습니다:
-
-```lua
--- lua/plugins/your-plugin.lua
-return {
-  "username/plugin-name",
-  config = function()
-    -- 플러그인 설정
-  end,
-}
-```
-
-### LSP 서버 추가
-1. Mason으로 서버 설치: `lua/plugins/mason.lua`의 `ensure_installed`에 추가
-2. LSP 활성화: `lua/core/lsp.lua`의 `vim.lsp.enable()`에 추가
-3. 서버 설정: `lsp/` 디렉토리에 설정 파일 생성
-
-## 💡 팁
-
-- `:Lazy` 명령으로 플러그인 관리 UI 열기
-- `:LspInfo` 명령으로 현재 LSP 상태 확인
-- `:Mason` 명령으로 LSP 서버 관리
-- `:checkhealth` 명령으로 설정 상태 확인
-
-## 📝 라이선스
-
-이 설정은 개인적인 사용을 위해 만들어졌습니다. 자유롭게 수정하고 사용하세요!
+- `:Lazy`: 플러그인 상태와 업데이트
+- `:Mason`: LSP 및 개발 도구 설치 상태
+- `:LspInfo`: 현재 버퍼 LSP 상태
+- `:checkhealth`: 전체 설정 점검

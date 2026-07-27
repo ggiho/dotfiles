@@ -189,10 +189,10 @@ vim.api.nvim_create_autocmd("LspAttach", {
 		-- Telescope 안전 로드
 		local has_tb, tb = pcall(require, "telescope.builtin")
 
-		-- 정의: 요청대로 순정 LSP로 바로 점프 (다른 파일도 자동 이동)
-		map("gd", vim.lsp.buf.definition, "[g]oto [d]efinition")
+		map("gd", vim.lsp.buf.definition, "Go to definition")
+		map("gD", vim.lsp.buf.declaration, "Go to declaration")
 
-		-- Neovim 0.11+ provides these LSP keymaps by default:
+		-- Neovim 0.11+ provides these discoverable LSP mappings by default:
 		-- grn - vim.lsp.buf.rename
 		-- gra - vim.lsp.buf.code_action
 		-- grr - vim.lsp.buf.references
@@ -200,54 +200,22 @@ vim.api.nvim_create_autocmd("LspAttach", {
 		-- grt - vim.lsp.buf.type_definition
 		-- gO  - vim.lsp.buf.document_symbol
 
-		-- Optional: Override with Telescope for better UI (currently using defaults)
-		-- if has_tb then
-		--     map("grr", tb.lsp_references, "[G]oto [R]eferences")
-		--     map("gri", tb.lsp_implementations, "[G]oto [I]mplementation")
-		--     map("grt", tb.lsp_type_definitions, "[G]oto [T]ype definition")
-		-- end
-
-		-- Additional Telescope-only features
 		if has_tb then
-			map("<leader>ds", tb.lsp_document_symbols, "[d]ocument [s]ymbols")
-			map("<leader>ws", tb.lsp_dynamic_workspace_symbols, "[w]orkspace [s]ymbols")
+			map("<leader>ls", tb.lsp_dynamic_workspace_symbols, "Workspace symbols")
 		else
-			map("<leader>ds", function()
-				vim.lsp.buf.document_symbol()
-			end, "[d]ocument [s]ymbols")
-			map("<leader>ws", function()
+			map("<leader>ls", function()
 				vim.lsp.buf.workspace_symbol()
-			end, "[w]orkspace [s]ymbols")
+			end, "Workspace symbols")
 		end
 
-		-- Additional LSP actions (duplicates of 0.11+ defaults for convenience)
-		map("<leader>rn", vim.lsp.buf.rename, "[r]e[n]ame") -- Same as grn
-		map("<leader>ca", vim.lsp.buf.code_action, "[c]ode [a]ction") -- Same as gra
-		map("K", vim.lsp.buf.hover, "Hover Documentation")
-		map("gD", vim.lsp.buf.declaration, "[g]oto [d]eclaration")
-
-		-- Code formatting (commonly used feature)
-		if client and client:supports_method("textDocument/formatting") then
-			map("<leader>f", function()
-				vim.lsp.buf.format({ async = true })
-			end, "[F]ormat code")
-		end
-
-		-- Signature help (useful for function parameters)
-		map("<leader>k", vim.lsp.buf.signature_help, "Signature [k]elp")
-
-		-- 워크스페이스 관리 (선택적 - 드물게 사용)
-		-- map("<leader>wa", vim.lsp.buf.add_workspace_folder, "[W]orkspace [A]dd Folder")
-		-- map("<leader>wr", vim.lsp.buf.remove_workspace_folder, "[W]orkspace [R]emove Folder")
-		-- map("<leader>wl", function()
-		-- 	print(vim.inspect(vim.lsp.buf.list_workspace_folders()))
-		-- end, "[W]orkspace [L]ist Folders")
-
-		-- Enhanced diagnostic navigation
-		map("gl", vim.diagnostic.open_float, "Show diagnostic (LazyVim style)")
-		map("<leader>dl", vim.diagnostic.setloclist, "[d]iagnostic [l]ist")
-		map("[d", vim.diagnostic.goto_prev, "Go to previous [d]iagnostic message")
-		map("]d", vim.diagnostic.goto_next, "Go to next [d]iagnostic message")
+		map("gl", vim.diagnostic.open_float, "Show diagnostic")
+		map("<leader>lq", vim.diagnostic.setloclist, "Diagnostics list")
+		map("[d", function()
+			vim.diagnostic.jump({ count = -1, float = true })
+		end, "Previous diagnostic")
+		map("]d", function()
+			vim.diagnostic.jump({ count = 1, float = true })
+		end, "Next diagnostic")
 
 		-- Force UTF-16 encoding for this client (LSP standard)
 		if client then
@@ -261,12 +229,12 @@ vim.api.nvim_create_autocmd("LspAttach", {
 
 		-- Inlay hints toggle (if supported)
 		if client and client.server_capabilities.inlayHintProvider then
-			map("<leader>th", function()
+			map("<leader>lh", function()
 				vim.lsp.inlay_hint.enable(
 					not vim.lsp.inlay_hint.is_enabled({ bufnr = event.buf }),
 					{ bufnr = event.buf }
 				)
-			end, "[t]oggle Inlay [h]ints")
+			end, "Toggle inlay hints")
 		end
 
 		-- 문서 하이라이트 (지원 시)
@@ -283,17 +251,9 @@ vim.api.nvim_create_autocmd("LspAttach", {
 
 		-- Neovim 0.11+ Enhanced Features
 
-		-- Setup completion (use traditional omnifunc approach for stability)
+		-- Keep Ctrl-Space as a convenient alias for Neovim's built-in LSP omnifunc.
 		if client and client.server_capabilities.completionProvider then
-			-- Disable new 0.11+ auto-completion to avoid aggressive behavior
-			-- vim.lsp.completion.enable(true, client.id, event.buf, { autotrigger = false })
-			
-			-- Use traditional omnifunc completion instead
-			vim.bo[event.buf].omnifunc = "v:lua.vim.lsp.omnifunc"
-			
-			-- Manual completion trigger (Ctrl+Space)
 			vim.keymap.set("i", "<C-Space>", function()
-				-- Use built-in omnifunc completion
 				vim.api.nvim_feedkeys(vim.api.nvim_replace_termcodes("<C-x><C-o>", true, false, true), "n", false)
 			end, { buffer = event.buf, desc = "Trigger LSP completion" })
 		end
