@@ -59,13 +59,13 @@ return {
 		"configure.ac", -- AutoTools
 		".git",
 	},
+	-- offsetEncoding is set globally to utf-16 via vim.lsp.config("*") in core/lsp.lua
 	capabilities = {
 		textDocument = {
 			completion = {
 				editsNearCursor = true,
 			},
 		},
-		offsetEncoding = { "utf-8", "utf-16" },
 	},
 	on_attach = function()
 		vim.api.nvim_buf_create_user_command(0, "LspClangdSwitchSourceHeader", function()

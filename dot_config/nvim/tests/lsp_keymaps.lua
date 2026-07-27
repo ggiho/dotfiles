@@ -56,6 +56,8 @@ assert(find_map("gD"), "gD declaration mapping is missing")
 assert(find_map("gl"), "gl diagnostic float mapping is missing")
 assert(find_map(" ls"), "workspace symbol mapping is missing")
 assert(find_map(" lq"), "diagnostic list mapping is missing")
+assert(find_map(" la"), "code action mapping is missing")
+assert(find_map(" lr"), "rename mapping is missing")
 assert(not find_map(" f"), "LSP must not shadow the Telescope <leader>f prefix")
 
 local previous_diagnostic = assert(find_map("[d"), "previous diagnostic mapping is missing")

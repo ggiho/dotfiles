@@ -5,16 +5,13 @@
 -- - LspAttach에서 키맵/하이라이트 등
 ------------------------------------------------------------
 
--- Set default LSP capabilities for consistent encoding (UTF-16 LSP standard)
-local default_capabilities = vim.lsp.protocol.make_client_capabilities()
-default_capabilities.offsetEncoding = { "utf-16" }
-
--- Override make_position_params to always include position encoding
-local original_make_position_params = vim.lsp.util.make_position_params
-vim.lsp.util.make_position_params = function(window, offset_encoding)
-	offset_encoding = offset_encoding or "utf-16"
-	return original_make_position_params(window, offset_encoding)
-end
+-- Force UTF-16 position encoding for every server (single source of truth).
+-- clangd reads `offsetEncoding`; other servers already negotiate UTF-16 by default.
+vim.lsp.config("*", {
+	capabilities = {
+		offsetEncoding = { "utf-16" },
+	},
+})
 
 -- Enhanced diagnostics configuration for 0.11+
 vim.diagnostic.config({
@@ -133,18 +130,7 @@ local function ensure_lsp(name)
 		end
 	end
 
-	-- Force UTF-16 encoding for all LSP clients (LSP standard)
 	vim.lsp.enable(name)
-
-	-- Set encoding after enable
-	vim.schedule(function()
-		local clients = vim.lsp.get_clients({ name = name })
-		for _, client in ipairs(clients) do
-			if client.offset_encoding ~= "utf-16" then
-				client.offset_encoding = "utf-16"
-			end
-		end
-	end)
 end
 
 -- 2) FileType → 서버 enable (with multiple servers per filetype support)
@@ -208,6 +194,10 @@ vim.api.nvim_create_autocmd("LspAttach", {
 			end, "Workspace symbols")
 		end
 
+		-- Ergonomic aliases for the 0.11 defaults gra/grn
+		map("<leader>la", vim.lsp.buf.code_action, "Code action")
+		map("<leader>lr", vim.lsp.buf.rename, "Rename symbol")
+
 		map("gl", vim.diagnostic.open_float, "Show diagnostic")
 		map("<leader>lq", vim.diagnostic.setloclist, "Diagnostics list")
 		map("[d", function()
@@ -217,18 +207,9 @@ vim.api.nvim_create_autocmd("LspAttach", {
 			vim.diagnostic.jump({ count = 1, float = true })
 		end, "Next diagnostic")
 
-		-- Force UTF-16 encoding for this client (LSP standard)
-		if client then
-			client.offset_encoding = "utf-16"
-			-- Also ensure capabilities reflect the encoding
-			if client.server_capabilities then
-				client.server_capabilities.offsetEncoding = "utf-16"
-				client.server_capabilities.positionEncoding = "utf-16"
-			end
-		end
-
-		-- Inlay hints toggle (if supported)
+		-- Inlay hints: enable by default and provide a toggle
 		if client and client.server_capabilities.inlayHintProvider then
+			vim.lsp.inlay_hint.enable(true, { bufnr = event.buf })
 			map("<leader>lh", function()
 				vim.lsp.inlay_hint.enable(
 					not vim.lsp.inlay_hint.is_enabled({ bufnr = event.buf }),
@@ -256,11 +237,6 @@ vim.api.nvim_create_autocmd("LspAttach", {
 			vim.keymap.set("i", "<C-Space>", function()
 				vim.api.nvim_feedkeys(vim.api.nvim_replace_termcodes("<C-x><C-o>", true, false, true), "n", false)
 			end, { buffer = event.buf, desc = "Trigger LSP completion" })
-		end
-
-		-- Enable inlay hints if supported
-		if client and client.server_capabilities.inlayHintProvider then
-			vim.lsp.inlay_hint.enable(true, { bufnr = event.buf })
 		end
 
 		-- Enhanced semantic token highlighting
