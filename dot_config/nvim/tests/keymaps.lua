@@ -20,12 +20,23 @@ for _, lhs in ipairs({ " w", " q", " re", " fp", "[b", "]b", " bb", " bd", " bD"
 end
 
 assert(find_global_map("n", " q").rhs == "<Cmd>quit!<CR>", "<leader>q must force-quit the current window")
+assert(find_global_map("n", " wq"), "<leader>wq must write and quit")
+assert(find_global_map("n", " +"), "<leader>+ increment mapping is missing")
+assert(find_global_map("n", " -"), "<leader>- decrement mapping is missing")
+assert(find_global_map("n", "Q"), "Q must be disabled")
+
+-- Buffer-centric navigation (windows/tabs are managed by tmux)
+assert(find_global_map("n", "H"), "Shift-H must switch to the previous buffer")
+assert(find_global_map("n", "L"), "Shift-L must switch to the next buffer")
 
 assert(find_global_map("x", "J"), "visual J line movement is missing")
 assert(find_global_map("x", "K"), "visual K line movement is missing")
 assert(find_global_map("x", "p"), "visual paste must preserve the yank register")
-assert(not find_global_map("n", "c"), "normal c must keep Vim's default register behavior")
-assert(not find_global_map("n", "x"), "normal x must keep Vim's default register behavior")
+
+-- Black-hole register mappings keep deletes/changes from clobbering the yank register
+assert(find_global_map("n", "c") and find_global_map("n", "c").rhs == '"_c', "normal c must use the black-hole register")
+assert(find_global_map("n", "x") and find_global_map("n", "x").rhs == '"_x', "normal x must use the black-hole register")
+assert(find_global_map("n", " d") and find_global_map("n", " d").rhs == '"_d', "<leader>d must use the black-hole register")
 
 local telescope = dofile(config_root .. "/lua/plugins/telescope.lua")[1]
 local telescope_keys = {}
@@ -61,15 +72,11 @@ assert(layout.width == 0.95 and layout.height == 0.95, "Telescope layout size mu
 assert(layout.vertical.preview_height == 0.7, "vertical preview height is missing")
 assert(layout.vertical.size == nil, "obsolete vertical.size config must not be used")
 
+-- vim-tmux-navigator was intentionally removed; tmux owns pane/window navigation.
 local plugin_specs = dofile(config_root .. "/lua/plugins/init.lua")
-local tmux_navigator = plugin_specs[2]
-local navigator_keys = {}
-for _, mapping in ipairs(tmux_navigator.keys) do
-	navigator_keys[mapping[1]] = true
-end
-
-for _, lhs in ipairs({ "<C-h>", "<C-j>", "<C-k>", "<C-l>" }) do
-	assert(navigator_keys[lhs], lhs .. " Neovim/tmux navigation mapping is missing")
+for _, spec in ipairs(plugin_specs) do
+	local name = type(spec) == "table" and spec[1] or spec
+	assert(name ~= "christoomey/vim-tmux-navigator", "vim-tmux-navigator must stay removed")
 end
 
 print("core keymap regression checks passed")
