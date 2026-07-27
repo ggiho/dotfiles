@@ -63,7 +63,27 @@ return {
 			end, { desc = "Explore working directory" })
 
 			require("mini.splitjoin").setup()
-			require("mini.surround").setup()
+
+			-- vim-surround (tpope) style: ys / ds / cs — keeps native `s` free
+			require("mini.surround").setup({
+				mappings = {
+					add = "ys",
+					delete = "ds",
+					replace = "cs",
+					find = "",
+					find_left = "",
+					highlight = "",
+					update_n_lines = "",
+				},
+				search_method = "cover_or_next",
+			})
+			-- Keep Visual-mode `y` (yank) intact; use `S` to surround a selection
+			pcall(vim.keymap.del, "x", "ys")
+			vim.keymap.set("x", "S", function()
+				require("mini.surround").add("visual")
+			end, { desc = "Add surrounding to selection" })
+			-- `yss` surrounds the whole line (vim-surround style)
+			vim.keymap.set("n", "yss", "ys_", { remap = true, desc = "Surround current line" })
 
 			local trailspace = require("mini.trailspace")
 			trailspace.setup({ only_in_normal_buffers = true })
@@ -71,6 +91,15 @@ return {
 				trailspace.trim()
 				trailspace.trim_last_lines()
 			end, { desc = "Clean trailing whitespace" })
+
+			-- Don't paint trailing whitespace on UI/special buffers (alpha dashboard, etc.)
+			vim.api.nvim_create_autocmd("FileType", {
+				pattern = { "alpha", "dashboard", "lazy", "mason", "help", "lspinfo", "checkhealth", "man", "qf" },
+				callback = function(ev)
+					vim.b[ev.buf].minitrailspace_disable = true
+					pcall(trailspace.unhighlight)
+				end,
+			})
 
 			local clue = require("mini.clue")
 			clue.setup({
