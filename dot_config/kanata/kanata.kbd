@@ -14,8 +14,15 @@
 (defcfg
   process-unmapped-keys yes
   concurrent-tap-hold yes
+  ;; 빠른 타이핑 중 홈로우모드 modifier(Ctrl 등) 오발동/stuck 방지.
+  ;; 직전에 다른 키를 눌렀으면 tap-hold를 즉시 tap으로 해소한다. (ZMK require-prior-idle-ms와 동일)
+  tap-hold-require-prior-idle 150
   macos-dev-names-exclude (
     "Karabiner DriverKit VirtualHIDKeyboard 1.8.0"
+    ;; TOTEM(블루투스 ZMK)은 kanata가 grab하지 않는다. 블루투스 재연결 시
+    ;; grab이 안 풀린 채 재open을 시도해 exclusive access 충돌 → Ctrl stuck 버그를
+    ;; 일으켰다. TOTEM 리매핑은 ZMK 펌웨어에서 처리한다.
+    "TOTEM"
   )
 )
 
@@ -65,11 +72,7 @@
   _ _ _ _ _ _ @nav_home @nav_left @nav_end _ _ _ _ _ @nav_down @nav_up @nav_rght i o m , .
 )
 
-;; Totem 등 a홀드를 ctrl로 보내는 외부 키보드용:
-;; ctrl + hjkl -> 방향키 (ctrl 제거하고 방향키만 출력)
-(defoverrides
-  (lctl h) (left)
-  (lctl j) (down)
-  (lctl k) (up)
-  (lctl l) (rght)
-)
+;; (제거됨) defoverrides (lctl h/j/k/l)->방향키 는 TOTEM(외부 ctrl+hjkl)용이었다.
+;; TOTEM을 macos-dev-names-exclude로 kanata grab 대상에서 뺐고, 내장 키보드는
+;; ctrl-nav 레이어가 방향키를 처리하므로 defoverrides는 불필요 + lctl 이중처리로
+;; Ctrl stuck을 악화시켜 제거했다. (2026-07-14)

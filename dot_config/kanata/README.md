@@ -250,6 +250,78 @@ IOHIDDeviceOpen error: (iokit/common) not permitted
 - `kanata.kbd`의 `macos-dev-names-exclude` 항목을 그 이름으로 맞춘다.
 - 새 기기에 적용할 때도 동일하게 버전 이름을 확인해 맞춰야 한다.
 
+### 7. `connect_failed asio.system:2` 무한 반복 (VHID driver가 너무 최신 = IPC 불일치)
+
+예시:
+
+```text
+connect_failed asio.system:2
+Waiting for DriverKit virtual keyboard... (n.n s/10.0s)
+output backend unavailable — releasing input devices
+```
+
+감별 (이 케이스 확정 조건):
+- kanata·VHID 데몬 프로세스 둘 다 정상 실행 중
+- grabber 프로세스 없음 (`pgrep -fl "karabiner_console_user_server|Karabiner-Core-Service"` 비어있음)
+- 권한 로그(`Input Monitoring`/`Accessibility`) 안 뜸
+- 순수하게 kanata가 데몬 소켓에 못 붙음 (`asio.system:2` = ENOENT)
+
+원인:
+- Karabiner VirtualHIDDevice driver가 kanata 지원 버전보다 **최신으로 자동 업데이트**됨.
+- kanata의 번들 `karabiner-driverkit` crate(1.11.0=0.2.0, 1.12.0=0.3.1)는 특정 driver 릴리스
+  IPC로 빌드되는데, pqrs가 minor 버전 사이에 protocol을 바꿔서 더 새 driver는 안 붙는다.
+- kanata 지원 driver 버전은 `docs/setup-macos.md`에 명시 (2026-07 기준 `v6.2.0`).
+
+진단:
+
+```bash
+tail /var/log/karabiner/virtual_hid_device_service.log   # version / driver_version / client_protocol_version
+strings /opt/homebrew/bin/kanata | grep karabiner-driverkit   # kanata의 crate 버전
+curl -fsSL https://raw.githubusercontent.com/jtroo/kanata/v1.12.0/docs/setup-macos.md | grep -i 'supported driver'
+```
+
+대응 (검증됨 2026-07-12, 재부팅 불필요):
+- **kanata 다운그레이드는 소용없다** (1.11.0/1.12.0 둘 다 실패). driver 쪽을 맞춰야 한다.
+- VHID를 지원버전(v6.2.0)으로 다운그레이드. **실제 터미널에서** 실행 (Claude Code `!`는 sudo 비번 못 받음).
+  명령은 **한 줄로** (긴 경로가 줄바꿈되면 뒤 인자가 별도 명령이 돼 실패).
+
+```bash
+# pkg: https://github.com/pqrs-org/Karabiner-DriverKit-VirtualHIDDevice/releases/tag/v6.2.0
+sudo installer -pkg /tmp/Karabiner-DriverKit-VirtualHIDDevice-6.2.0.pkg -target /
+sudo /Applications/.Karabiner-VirtualHIDDevice-Manager.app/Contents/MacOS/Karabiner-VirtualHIDDevice-Manager forceActivate
+```
+
+- forceActivate 직후 데몬이 v6.2.0으로 재동작 (로그 `virtual_hid_keyboard_ready_ is changed: true`, 소켓이 `<hash>.sock`로 변경).
+- 그다음 kanata만 재시작: `sudo launchctl kickstart -k system/local.kanata`
+- 정상 로그: `driver connected: true` / `driver version matched: true` / `virtual_hid_keyboard_ready true` / `keyboard grabbed`.
+- deactivate·재부팅 모두 불필요했다.
+
+### 8. 외부 블루투스 키보드(TOTEM)에서 Ctrl이 눌린 채 stuck / 글자 멋대로 입력
+
+예시:
+
+```text
+IOHIDDeviceOpen error: (iokit/common) exclusive access and device already open TOTEM
+```
+증상: `999111;;;` 처럼 멋대로 찍히고, 홈로우모드의 Ctrl(A홀드)이 눌린 채 멈춘다.
+
+원인:
+- TOTEM(블루투스 ZMK)이 붙었다 떨어질 때, kanata가 이전 grab을 close 못한 채 재open을
+  시도 → `exclusive access` 충돌. 그 상태에서 modifier(Ctrl) release가 전달 안 돼 stuck.
+- 재부팅/절전 복귀 후 특히 잘 난다.
+
+대응 (정답, 2026-07-14):
+- **kanata가 TOTEM을 grab하지 않게 제외.** `kanata.kbd`의 `macos-dev-names-exclude`에 `"TOTEM"` 추가.
+  (chezmoi 관리 → 소스에서 수정 후 `chezmoi apply` → `kanata --check` → 재시작.)
+- 내장 키보드는 kanata 리매핑, TOTEM은 ZMK 펌웨어 자체 리매핑 사용.
+- exclude 이름은 TOTEM 연결 상태에서 `sudo kanata --list`로 정확히 확인 (기본은 `TOTEM`).
+
+> [!danger] "연결 후 kickstart로 재grab"은 하지 말 것
+> TOTEM을 kanata로 다시 grab하려는 시도 자체가 위 충돌/Ctrl stuck의 원인이다. `### 5`의
+> "kanata로 TOTEM 방향키 처리" 방식은 폐기하고, TOTEM은 exclude한다.
+
+긴급 (Ctrl stuck 중): `sudo launchctl bootout system/local.kanata` → kanata 꺼지면 키보드 즉시 정상.
+
 ## 지금 구성에서 기억할 것
 
 - 평소엔 터미널에서 직접 `sudo kanata ...`를 띄울 필요 없다.
