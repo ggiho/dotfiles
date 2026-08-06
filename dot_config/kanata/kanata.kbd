@@ -14,9 +14,9 @@
 (defcfg
   process-unmapped-keys yes
   concurrent-tap-hold yes
-  ;; 빠른 타이핑 중 홈로우모드 modifier(Ctrl 등) 오발동/stuck 방지.
-  ;; 직전에 다른 키를 눌렀으면 tap-hold를 즉시 tap으로 해소한다. (ZMK require-prior-idle-ms와 동일)
-  tap-hold-require-prior-idle 150
+  ;; NOTE: tap-hold-require-prior-idle 은 S+D(Alt+Cmd) 같은 빠른 modifier
+  ;; 동시 조합을 tap으로 처리해 막아버려서 쓰지 않는다. Ctrl stuck은 아래
+  ;; defoverrides 제거 + TOTEM 제외로 대응한다.
   macos-dev-names-exclude (
     "Karabiner DriverKit VirtualHIDKeyboard 1.8.0"
     ;; TOTEM(블루투스 ZMK)은 kanata가 grab하지 않는다. 블루투스 재연결 시
