@@ -7,7 +7,7 @@ DMSCTL_ROOT     := env_var_or_default("DMSCTL_ROOT", env_var("HOME") + "/20_Work
 
 # ── Modules ───────────────────────────────────────────────────────────────────
 # RDS/Aurora parameter group + cluster management (use: just rds <recipe>)
-mod rds '/Users/giho.seong/10_Database/AWS/rds/terraform/justfile'
+mod? rds '~/10_Database/AWS/rds/terraform/justfile'
 # ──────────────────────────────────────────────────────────────────────────────
 
 # [deprecated: use mysqlsh-dump-data instead]

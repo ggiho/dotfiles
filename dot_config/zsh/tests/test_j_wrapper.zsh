@@ -8,10 +8,21 @@ typeset -ga __vared_prompts
 typeset -gA __prompt_answers
 typeset -g __buffer=""
 typeset -g __fzf_queue_file=""
+typeset -g __hosts_file=""
+typeset -g __work_home
+__work_home=$(mktemp -d)
+export ASURION_HOME="$__work_home"
+export JUSTFILE="$TEST_JUSTFILE"
 
 cleanup() {
   if [[ -n "$__fzf_queue_file" && -f "$__fzf_queue_file" ]]; then
     rm -f "$__fzf_queue_file"
+  fi
+  if [[ -n "$__hosts_file" && -f "$__hosts_file" ]]; then
+    rm -f "$__hosts_file"
+  fi
+  if [[ -n "$__work_home" && -d "$__work_home" ]]; then
+    rm -rf "$__work_home"
   fi
   return 0
 }
@@ -23,6 +34,9 @@ reset_mocks() {
   __prompt_answers=()
   __buffer=""
   __fzf_queue_file=$(mktemp)
+  __hosts_file=$(mktemp)
+  printf '%s\n' 'OnTheGo DEV:aurora-dev.otg.apac.npr.aws.asurion.net:3306:giho.seong' > "$__hosts_file"
+  export MYSQL_HOSTS_FILE="$__hosts_file"
 }
 
 queue_fzf() {
@@ -45,7 +59,11 @@ fzf() {
     print -u2 -- 'fzf queue exhausted'
     return 1
   fi
-  printf '%s\n' "$choice"
+  if [[ " $* " == *" --print-query "* ]]; then
+    printf '\n%s\n' "$choice"
+  else
+    printf '%s\n' "$choice"
+  fi
 }
 
 vared() {
@@ -99,7 +117,7 @@ run_mysqlsh_dump_tables_case() {
     'mysqlsh-dump-tables host user database tables threads="4" outdir=""' \
     'OnTheGo DEV  →  aurora-dev.otg.apac.npr.aws.asurion.net'
   __prompt_answers["user (e.g. giho.seong) [giho.seong]: "]=''
-  __prompt_answers["database (target schema): "]='sample_db'
+  __prompt_answers["database (target schema (empty = user DBs only, excludes mysql/sys/information_schema/performance_schema)): "]='sample_db'
   __prompt_answers["tables (comma-separated table names (e.g. TABLE1,TABLE2)): "]='TABLE1,TABLE2'
   __prompt_answers["threads (parallel threads (default: 4)) [4]: "]=''
   __prompt_answers["outdir (output directory (default: dump_<database>_tables_<timestamp>)): "]=''
@@ -108,7 +126,7 @@ run_mysqlsh_dump_tables_case() {
 
   assert_eq "${#__vared_prompts[@]}" '5' 'mysqlsh-dump-tables prompt count'
   assert_eq "${__vared_prompts[1]}" 'user (e.g. giho.seong) [giho.seong]: ' 'mysqlsh-dump-tables first prompt'
-  assert_eq "${__vared_prompts[2]}" 'database (target schema): ' 'mysqlsh-dump-tables second prompt'
+  assert_eq "${__vared_prompts[2]}" 'database (target schema (empty = user DBs only, excludes mysql/sys/information_schema/performance_schema)): ' 'mysqlsh-dump-tables second prompt'
   assert_contains "$__buffer" 'bash -lc ' 'mysqlsh-dump-tables bash wrapper'
   assert_contains "$__buffer" 'mysqlsh --host="aurora-dev.otg.apac.npr.aws.asurion.net"' 'mysqlsh-dump-tables recipe body'
   assert_contains "$__buffer" 'aurora-dev.otg.apac.npr.aws.asurion.net' 'mysqlsh-dump-tables host'

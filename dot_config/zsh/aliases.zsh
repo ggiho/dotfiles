@@ -22,7 +22,6 @@ alias python="python3"
 alias ob="obsidian"
 alias cc="claude --dangerously-skip-permissions"
 alias pgcli="~/.local/bin/pgcli"
-alias asurion_claude_login="/Users/giho.seong/.claude/claude_login.sh"
 alias lg="lazygit"
 
 function yz() {
@@ -40,20 +39,24 @@ function yz() {
 }
 
 # asurion
-export ASURION_HOME="$HOME/20_Work/01_Asurion"
-alias db="$HOME/.local/bin/db-connect.sh"
-alias aa="source $ASURION_HOME/utils/aws-switch.sh"
-alias tag="$ASURION_HOME/utils/tag"
-alias decrypt="noglob $ASURION_HOME/utils/voltage/d"
-alias encrypt="noglob $ASURION_HOME/utils/voltage/e"
-alias encrypt-soho="noglob $ASURION_HOME/utils/voltage/e-soho"
-alias decrypt-soho="noglob $ASURION_HOME/utils/voltage/d-soho"
-alias encrypt-otg="noglob $ASURION_HOME/utils/voltage/e-otg"
-alias decrypt-otg="noglob $ASURION_HOME/utils/voltage/d-otg"
-alias encrypt-otg-dev="noglob $ASURION_HOME/utils/voltage/e-otg-dev"
-alias decrypt-otg-dev="noglob $ASURION_HOME/utils/voltage/d-otg-dev"
-alias encrypt-hz-uat="noglob $ASURION_HOME/utils/voltage/e-hz-uat"
-alias decrypt-hz-uat="noglob $ASURION_HOME/utils/voltage/d-hz-uat"
+ASURION_HOME="${ASURION_HOME:-$HOME/20_Work/01_Asurion}"
+if [[ -d "$ASURION_HOME" ]]; then
+  export ASURION_HOME
+  alias asurion_claude_login="$HOME/.claude/claude_login.sh"
+  alias db="$HOME/.local/bin/db-connect.sh"
+  alias aa="source $ASURION_HOME/utils/aws-switch.sh"
+  alias tag="$ASURION_HOME/utils/tag"
+  alias decrypt="noglob $ASURION_HOME/utils/voltage/d"
+  alias encrypt="noglob $ASURION_HOME/utils/voltage/e"
+  alias encrypt-soho="noglob $ASURION_HOME/utils/voltage/e-soho"
+  alias decrypt-soho="noglob $ASURION_HOME/utils/voltage/d-soho"
+  alias encrypt-otg="noglob $ASURION_HOME/utils/voltage/e-otg"
+  alias decrypt-otg="noglob $ASURION_HOME/utils/voltage/d-otg"
+  alias encrypt-otg-dev="noglob $ASURION_HOME/utils/voltage/e-otg-dev"
+  alias decrypt-otg-dev="noglob $ASURION_HOME/utils/voltage/d-otg-dev"
+  alias encrypt-hz-uat="noglob $ASURION_HOME/utils/voltage/e-hz-uat"
+  alias decrypt-hz-uat="noglob $ASURION_HOME/utils/voltage/d-hz-uat"
+fi
 
 
 alias ..="cd .."
@@ -79,8 +82,9 @@ alias gcoall='git checkout -- .'
 alias gr='git remote'
 alias gre='git reset'
 
+if [[ -d "$ASURION_HOME" ]]; then
 # just
-export JUSTFILE="$HOME/.config/justfile/justfile"
+export JUSTFILE="${JUSTFILE:-$HOME/.config/justfile/justfile}"
 export DMSCTL_ROOT="$HOME/20_Work/01_Asurion/scripts/aws/dms"
 export DDB_SCRIPT_DIR="$HOME/10_Database/AWS/dynamodb"
 alias vj="vi $JUSTFILE"
@@ -89,16 +93,18 @@ j() {
   local selected recipe sig rest param name default prompt_str val cmd dry line fzf_selected
   local -a params args db_hosts db_labels db_users host_options just_lines
   local -A hints
-  local hosts_file="$HOME/.config/mysql/hosts"
+  local hosts_file="${MYSQL_HOSTS_FILE:-$HOME/.config/mysql/hosts}"
   local selected_user=""
 
-  # ── Parse module declarations: `mod NAME 'PATH'` ──
+  # ── Parse module declarations: `mod NAME 'PATH'` / `mod? NAME 'PATH'` ──
   local -a mod_names mod_paths
-  local _ml
+  local _ml _mod_path
   while IFS= read -r _ml; do
-    if [[ "$_ml" =~ '^[[:space:]]*mod[[:space:]]+([A-Za-z0-9_-]+)[[:space:]]+["'\'']([^"'\'']+)["'\'']' ]]; then
+    if [[ "$_ml" =~ '^[[:space:]]*mod[?]?[[:space:]]+([A-Za-z0-9_-]+)[[:space:]]+["'\'']([^"'\'']+)["'\'']' ]]; then
+      _mod_path="${match[2]/#\~/$HOME}"
+      [[ -f "$_mod_path" ]] || continue
       mod_names+=("${match[1]}")
-      mod_paths+=("${match[2]}")
+      mod_paths+=("$_mod_path")
     fi
   done < "$JUSTFILE"
 
@@ -272,3 +278,4 @@ print(text, end="")')
 
   print -z "bash -lc $quoted_cmd"
 }
+fi
