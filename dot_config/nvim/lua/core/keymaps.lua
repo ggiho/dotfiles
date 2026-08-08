@@ -59,6 +59,24 @@ map("n", "x", '"_x', { desc = "Delete char without yanking" })
 -- Disable Ex mode
 map("n", "Q", "<nop>", { desc = "Disable Ex mode" })
 
+-- Seamless Alt-hjkl navigation between nvim splits and tmux panes.
+-- tmux forwards M-hjkl into nvim when a vim process is focused (is_vim check);
+-- move the nvim split, and if already at the edge, hand off to the tmux pane.
+local function tmux_aware_nav(nvim_dir, tmux_flag)
+	return function()
+		local prev = vim.api.nvim_get_current_win()
+		vim.cmd.wincmd(nvim_dir)
+		if prev == vim.api.nvim_get_current_win() and vim.env.TMUX then
+			vim.system({ "tmux", "select-pane", "-" .. tmux_flag })
+		end
+	end
+end
+
+map("n", "<M-h>", tmux_aware_nav("h", "L"), { desc = "Navigate left (split/tmux pane)" })
+map("n", "<M-j>", tmux_aware_nav("j", "D"), { desc = "Navigate down (split/tmux pane)" })
+map("n", "<M-k>", tmux_aware_nav("k", "U"), { desc = "Navigate up (split/tmux pane)" })
+map("n", "<M-l>", tmux_aware_nav("l", "R"), { desc = "Navigate right (split/tmux pane)" })
+
 vim.api.nvim_create_autocmd("TextYankPost", {
 	desc = "Highlight yanked text",
 	group = vim.api.nvim_create_augroup("core-highlight-yank", { clear = true }),
