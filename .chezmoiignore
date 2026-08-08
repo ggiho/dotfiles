@@ -21,3 +21,7 @@ docs/**
 Library/Preferences/org.pqrs.Karabiner-Elements*.plist
 Library/Preferences/org.pqrs.Karabiner-EventViewer.plist
 Library/Preferences/org.pqrs.Karabiner-Updater.plist
+
+# --- db-connect: 스크립트는 관리하되, 서버 목록(hosts)은 계정/호스트 정보라 제외
+# (다른 PC에서는 ~/.config/mysql/hosts 만 수동으로 넣으면 `db` 동작)
+.config/mysql/hosts

@@ -41,7 +41,7 @@ function yz() {
 
 # asurion
 export ASURION_HOME="$HOME/20_Work/01_Asurion"
-alias db="$ASURION_HOME/utils/db-connect.sh"
+alias db="$HOME/.local/bin/db-connect.sh"
 alias aa="source $ASURION_HOME/utils/aws-switch.sh"
 alias tag="$ASURION_HOME/utils/tag"
 alias decrypt="noglob $ASURION_HOME/utils/voltage/d"
