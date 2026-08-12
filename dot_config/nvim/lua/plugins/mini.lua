@@ -62,6 +62,18 @@ return {
 				toggle_files(vim.uv.cwd())
 			end, { desc = "Explore working directory" })
 
+			-- Enter opens a file and closes the explorer (same as go_in_plus / L),
+			-- and enters directories. mini.files allows one key per action, so add
+			-- <CR> as an extra buffer-local mapping on explorer creation.
+			vim.api.nvim_create_autocmd("User", {
+				pattern = "MiniFilesBufferCreate",
+				callback = function(args)
+					vim.keymap.set("n", "<CR>", function()
+						files.go_in({ close_on_file = true })
+					end, { buffer = args.data.buf_id, desc = "Go in / open file and close" })
+				end,
+			})
+
 			require("mini.splitjoin").setup()
 
 			-- vim-surround (tpope) style: ys / ds / cs — keeps native `s` free
