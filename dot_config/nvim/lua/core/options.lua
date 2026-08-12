@@ -30,3 +30,15 @@ opt.clipboard:append("unnamedplus")
 
 opt.splitright = true
 opt.splitbelow = true
+
+-- Global wrap stays off for code; soft-wrap prose filetypes to the window width.
+-- linebreak = break at word boundaries, breakindent = keep list/quote indent on wrap.
+vim.api.nvim_create_autocmd("FileType", {
+    pattern = { "markdown", "text", "gitcommit" },
+    group = vim.api.nvim_create_augroup("core-prose-wrap", { clear = true }),
+    callback = function()
+        vim.opt_local.wrap = true
+        vim.opt_local.linebreak = true
+        vim.opt_local.breakindent = true
+    end,
+})
