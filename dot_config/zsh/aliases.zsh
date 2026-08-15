@@ -279,3 +279,52 @@ print(text, end="")')
   print -z "bash -lc $quoted_cmd"
 }
 fi
+
+# ── Obsidian / Notes ────────────────────────────────────────
+export NOTES_DIR="$HOME/40_Notes"
+export NOTES_INBOX="$NOTES_DIR/00 Inbox"
+
+# vsync : 볼트를 지금 즉시 커밋+push (수동 백업). 대화형 셸이라 TCC 제약 없음.
+alias vsync="$HOME/.local/bin/obsidian-vault-sync.sh"
+
+# n [제목...] : 새 노트를 00 Inbox에 만들고 nvim으로 편집
+n() {
+  local title slug file
+  title="$*"; [[ -z "$title" ]] && vared -p "제목: " title
+  [[ -z "$title" ]] && return
+  slug=$(printf '%s' "$title" | tr '[:upper:]' '[:lower:]' \
+        | sed 's/[^a-z0-9가-힣]/-/g; s/-\{2,\}/-/g; s/^-//; s/-$//')
+  file="$NOTES_INBOX/$(date +%Y-%m-%d)-${slug}.md"
+  [[ -f "$file" ]] || printf -- '---\ntitle: %s\ncreated: %s\ntags: []\n---\n\n# %s\n\n' \
+      "$title" "$(date '+%Y-%m-%d %H:%M')" "$title" > "$file"
+  nvim "$file"
+}
+
+# nc [메모...] : 편집기 없이 오늘 데일리 노트에 타임스탬프로 append (초고속 캡처)
+nc() {
+  local file="$NOTES_INBOX/$(date +%Y-%m-%d).md" line="$*"
+  [[ -f "$file" ]] || printf -- '# %s\n\n' "$(date +%Y-%m-%d)" > "$file"
+  [[ -z "$line" ]] && vared -p "메모: " line
+  [[ -z "$line" ]] && return
+  printf -- '- %s  %s\n' "$(date +%H:%M)" "$line" >> "$file"
+  echo "✓ 추가됨 → ${file:t}"
+}
+
+# nf : 볼트 전체에서 파일명으로 찾아 열기 (fzf + bat 미리보기)
+nf() {
+  local f; f=$(cd "$NOTES_DIR" && rg --files -g '*.md' \
+    | fzf --prompt="note> " --height=80% --reverse \
+          --preview 'bat -p --color=always "'"$NOTES_DIR"'/{}"' --preview-window=right:60%)
+  [[ -n "$f" ]] && nvim "$NOTES_DIR/$f"
+}
+
+# ng [검색어] : 노트 내용 전문검색 → 매칭 줄에서 바로 열기 (ripgrep + fzf)
+ng() {
+  local m; m=$(cd "$NOTES_DIR" && rg --line-number --no-heading --color=always --smart-case "${*:-}" -g '*.md' \
+    | fzf --ansi --prompt="grep> " --height=80% --reverse -d: \
+          --preview 'bat -p --color=always --highlight-line {2} "'"$NOTES_DIR"'/{1}"' \
+          --preview-window='right:60%:+{2}-/2')
+  [[ -z "$m" ]] && return
+  local f="${m%%:*}" l="${m#*:}"; l="${l%%:*}"   # file:line:text → file, line
+  nvim "+${l}" "$NOTES_DIR/$f"
+}

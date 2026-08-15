@@ -1,3 +1,12 @@
+-- Obsidian UI 기능(위키링크/문법 conceal 렌더링)에 필요한 conceallevel 설정.
+-- 마크다운 파일에서만 적용해 다른 파일 타입엔 영향 없게 함.
+vim.api.nvim_create_autocmd("FileType", {
+	pattern = "markdown",
+	callback = function()
+		vim.opt_local.conceallevel = 2
+	end,
+})
+
 return {
 	"epwalsh/obsidian.nvim",
 	version = "*", -- recommended, use latest release instead of latest commit
@@ -17,15 +26,30 @@ return {
 
 		-- see below for full list of optional dependencies 👇
 	},
+	-- 어디서든 노트를 만들고/찾고/열 수 있는 워크플로우 키맵 (누르면 플러그인 로드)
+	keys = {
+		{ "<leader>on", "<cmd>ObsidianNew<cr>", desc = "Obsidian: 새 노트" },
+		{ "<leader>oo", "<cmd>ObsidianQuickSwitch<cr>", desc = "Obsidian: 노트 빠른 전환" },
+		{ "<leader>os", "<cmd>ObsidianSearch<cr>", desc = "Obsidian: 내용 전문검색" },
+		{ "<leader>ob", "<cmd>ObsidianBacklinks<cr>", desc = "Obsidian: 백링크" },
+		{ "<leader>od", "<cmd>ObsidianToday<cr>", desc = "Obsidian: 오늘 데일리노트" },
+		{ "<leader>ot", "<cmd>ObsidianTemplate<cr>", desc = "Obsidian: 템플릿 삽입" },
+		{ "<leader>ol", "<cmd>ObsidianLink<cr>", mode = "v", desc = "Obsidian: 선택영역 링크" },
+	},
 	opts = {
 		workspaces = {
 			{
 				name = "sb",
-				path = vim.fn.expand("~") .. "/Documents/Obsidian Vault",
+				path = vim.fn.expand("~") .. "/40_Notes",
 			},
 		},
-		notes_subdir = "inbox",
+		notes_subdir = "00 Inbox",
 		new_notes_location = "notes_subdir",
+
+		daily_notes = {
+			folder = "00 Inbox",
+			date_format = "%Y-%m-%d",
+		},
 
 		disable_frontmatter = true,
 		templates = {
