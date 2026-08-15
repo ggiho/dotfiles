@@ -5,6 +5,7 @@ return {
 	dependencies = {
 		"hrsh7th/cmp-buffer", -- source for text in buffer
 		"hrsh7th/cmp-path", -- source for file system paths
+		"hrsh7th/cmp-nvim-lsp", -- LSP 완성 소스 (obsidian-ls + 코드 LSP → nvim_lsp)
 		{
 			"L3MON4D3/LuaSnip",
 			-- follow latest release.
@@ -20,6 +21,21 @@ return {
 	},
 	config = function()
 		local cmp = require("cmp")
+
+		-- LSP 완성 capabilities 광고 (obsidian-ls 및 코드 LSP → cmp의 nvim_lsp 소스).
+		-- core/lsp.lua가 플러그인보다 먼저 실행되므로 여기(플러그인 로드 후)에서 병합.
+		local ok_cmplsp, cmp_nvim_lsp = pcall(require, "cmp_nvim_lsp")
+		if ok_cmplsp then
+			cmp_nvim_lsp.setup() -- InsertEnter 시 붙은 LSP별 nvim_lsp 소스 등록 (필수)
+			vim.lsp.config("*", {
+				capabilities = vim.tbl_deep_extend(
+					"force",
+					cmp_nvim_lsp.default_capabilities(),
+					{ offsetEncoding = { "utf-16" } } -- clangd용 인코딩 유지
+				),
+			})
+		end
+
 		cmp.setup({
 			sources = cmp.config.sources({
 				{ name = "render-markdown" },
