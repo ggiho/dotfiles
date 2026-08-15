@@ -10,7 +10,7 @@ echo "▶ 1. 의존성 확인/설치 (Homebrew)"
 if ! command -v brew >/dev/null 2>&1; then
   echo "  ✗ Homebrew가 없습니다 — 먼저 설치: https://brew.sh"; exit 1
 fi
-typeset -A pkgs=( nvim neovim  rg ripgrep  bat bat  fzf fzf )
+typeset -A pkgs=( nvim neovim  rg ripgrep  bat bat  fzf fzf  jq jq )
 for bin pkg in "${(@kv)pkgs}"; do
   if command -v "$bin" >/dev/null 2>&1; then
     echo "  ✓ $bin"
@@ -38,9 +38,24 @@ else
   echo "  ✗ plist 없음 — 'chezmoi apply' 먼저 실행하세요"
 fi
 
-echo "▶ 5. 남은 수동 단계"
-cat <<'EOF'
-  - 새 셸 열기 또는 `sz`  → 캡처 함수 n/nc/nf/ng 활성화
-  - Obsidian 앱 실행 → "Open folder as vault" → ~/40_Notes 선택
-EOF
-echo "✅ 부트스트랩 완료"
+echo "▶ 5. Obsidian 앱에 볼트 자동 등록"
+if pgrep -x Obsidian >/dev/null 2>&1; then
+  echo "  ⚠️ Obsidian 실행 중 — 종료 후 다시 실행하세요 (등록 건너뜀)"
+else
+  OBS_JSON="$HOME/Library/Application Support/obsidian/obsidian.json"
+  mkdir -p "${OBS_JSON:h}"
+  [[ -f "$OBS_JSON" ]] || echo '{"vaults":{}}' > "$OBS_JSON"
+  if jq -e --arg p "$VAULT" 'any(.vaults[]; .path==$p)' "$OBS_JSON" >/dev/null 2>&1; then
+    echo "  ✓ 이미 등록됨"
+  else
+    id=$(openssl rand -hex 8)
+    ts=$(( $(date +%s) * 1000 ))
+    jq --arg id "$id" --arg p "$VAULT" --argjson ts "$ts" \
+      '.vaults[$id] = {path:$p, ts:$ts, open:true}' "$OBS_JSON" > "$OBS_JSON.tmp" \
+      && mv "$OBS_JSON.tmp" "$OBS_JSON" && echo "  ✓ 등록 완료 (다음 실행 시 자동 오픈)"
+  fi
+fi
+
+echo "▶ 6. 남은 단계 (딱 하나)"
+echo "  - 새 셸 열기 또는 \`sz\`  → 캡처 함수 n/nc/nf/ng 활성화"
+echo "✅ 부트스트랩 완료 — Obsidian 실행하면 플러그인·테마·설정 그대로 적용됩니다"
