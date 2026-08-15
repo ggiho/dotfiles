@@ -287,6 +287,9 @@ export NOTES_INBOX="$NOTES_DIR/00 Inbox"
 # vsync : 볼트를 지금 즉시 커밋+push (수동 백업). 대화형 셸이라 TCC 제약 없음.
 alias vsync="$HOME/.local/bin/obsidian-vault-sync.sh"
 
+# gpub : 볼트 공개노트(publish:true) → Astro 가든 빌드 + Cloudflare 배포 (한 방)
+alias gpub='(cd ~/30_Projects/01_Personal/garden && npm run publish:site && npm run deploy)'
+
 # n [제목...] : 새 노트를 00 Inbox에 만들고 nvim으로 편집
 n() {
   local title slug file
