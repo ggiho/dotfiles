@@ -10,7 +10,7 @@ echo "▶ 1. 의존성 확인/설치 (Homebrew)"
 if ! command -v brew >/dev/null 2>&1; then
   echo "  ✗ Homebrew가 없습니다 — 먼저 설치: https://brew.sh"; exit 1
 fi
-typeset -A pkgs=( nvim neovim  rg ripgrep  bat bat  fzf fzf  jq jq )
+typeset -A pkgs=( nvim neovim  rg ripgrep  bat bat  fzf fzf  jq jq  glow glow  node node )
 for bin pkg in "${(@kv)pkgs}"; do
   if command -v "$bin" >/dev/null 2>&1; then
     echo "  ✓ $bin"
