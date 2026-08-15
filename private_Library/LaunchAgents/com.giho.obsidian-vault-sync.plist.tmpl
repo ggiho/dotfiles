@@ -6,15 +6,15 @@
     <string>com.giho.obsidian-vault-sync</string>
     <key>ProgramArguments</key>
     <array>
-        <string>/Users/giho.seong/.local/bin/obsidian-vault-sync.sh</string>
+        <string>{{ .chezmoi.homeDir }}/.local/bin/obsidian-vault-sync.sh</string>
     </array>
     <key>StartInterval</key>
     <integer>3600</integer>
     <key>RunAtLoad</key>
     <true/>
     <key>StandardOutPath</key>
-    <string>/Users/giho.seong/.local/state/obsidian-vault-sync.log</string>
+    <string>{{ .chezmoi.homeDir }}/.local/state/obsidian-vault-sync.log</string>
     <key>StandardErrorPath</key>
-    <string>/Users/giho.seong/.local/state/obsidian-vault-sync.log</string>
+    <string>{{ .chezmoi.homeDir }}/.local/state/obsidian-vault-sync.log</string>
 </dict>
 </plist>

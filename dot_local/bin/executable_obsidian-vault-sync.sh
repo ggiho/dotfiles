@@ -22,6 +22,13 @@ else
   echo "$(ts) no changes"
 fi
 
+# 원격 변경을 먼저 통합 (다중 PC 충돌 방지). 충돌/오프라인이면 안전하게 중단하고 push 건너뜀.
+if ! git -C "$VAULT" pull --rebase --autostash >/dev/null 2>&1; then
+  git -C "$VAULT" rebase --abort >/dev/null 2>&1 || true
+  echo "$(ts) pull 실패/충돌 — 수동 확인 필요, push 건너뜀 (로컬 커밋은 보존됨)"
+  exit 1
+fi
+
 # push는 실패해도(오프라인 등) 스크립트를 죽이지 않음 — 로컬 커밋은 이미 안전
 if git -C "$VAULT" push origin HEAD >/dev/null 2>&1; then
   echo "$(ts) pushed"

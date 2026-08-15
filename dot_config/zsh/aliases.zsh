@@ -314,7 +314,7 @@ nc() {
 nf() {
   local f; f=$(cd "$NOTES_DIR" && rg --files -g '*.md' \
     | fzf --prompt="note> " --height=80% --reverse \
-          --preview 'bat -p --color=always "'"$NOTES_DIR"'/{}"' --preview-window=right:60%)
+          --preview 'bat -p --color=always '"$NOTES_DIR"'/{}' --preview-window=right:60%)
   [[ -n "$f" ]] && nvim "$NOTES_DIR/$f"
 }
 
@@ -322,7 +322,7 @@ nf() {
 ng() {
   local m; m=$(cd "$NOTES_DIR" && rg --line-number --no-heading --color=always --smart-case "${*:-}" -g '*.md' \
     | fzf --ansi --prompt="grep> " --height=80% --reverse -d: \
-          --preview 'bat -p --color=always --highlight-line {2} "'"$NOTES_DIR"'/{1}"' \
+          --preview 'bat -p --color=always --highlight-line {2} '"$NOTES_DIR"'/{1}' \
           --preview-window='right:60%:+{2}-/2')
   [[ -z "$m" ]] && return
   local f="${m%%:*}" l="${m#*:}"; l="${l%%:*}"   # file:line:text → file, line
