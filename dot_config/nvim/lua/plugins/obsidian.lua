@@ -52,17 +52,15 @@ return {
 			date_format = "YYYY-MM-DD", -- 포크는 moment식 토큰 (strftime 아님)
 		},
 
-		disable_frontmatter = true,
+		frontmatter = { enabled = false }, -- (구 disable_frontmatter=true)
 		templates = {
 			folder = "templates",
 			date_format = "YYYY-MM-DD",
 			time_format = "HH:mm",
 		},
 
-		completion = {
-			nvim_cmp = true,
-			min_chars = 2,
-		},
+		-- 완성은 포크 4.0부터 내장 LSP(obsidian-ls)가 담당 (구 completion.nvim_cmp 제거).
+		-- nvim-cmp로 받으려면 cmp-nvim-lsp 필요 (nvim-cmp.lua 참고).
 
 		-- 렌더링은 render-markdown.nvim이 담당 → obsidian 자체 UI는 끔 (이중 렌더 방지)
 		ui = { enable = false },
