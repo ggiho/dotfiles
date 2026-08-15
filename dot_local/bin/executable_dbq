@@ -1,0 +1,105 @@
+#!/bin/bash
+
+# dbq - 비대화식 DB 쿼리 실행 (db-connect.sh 의 스크립트/에이전트용 버전)
+#
+# 사용법:
+#   dbq "<표시명>" "<SQL>"     쿼리 실행 (결과를 stdout으로)
+#   dbq --list                 사용 가능한 표시명 목록
+#
+# 표시명은 ~/.config/mysql/hosts 의 첫 필드. 부분/대소문자 무시 매칭.
+# 접속정보 출처는 db-connect.sh 와 동일:
+#   - 서버 목록: ~/.config/mysql/hosts  (형식: 표시명:호스트:포트:사용자[:타입[:DB명]])
+#   - 비밀번호 : macOS Keychain 서비스 "mysql-db-connect", account=사용자
+# 클라이언트: 타입 없음/mysql -> mysql -e, pg/postgres -> psql -c
+
+set -uo pipefail
+
+HOSTS_FILE="$HOME/.config/mysql/hosts"
+
+err() { printf '%s\n' "$*" >&2; }
+
+usage() {
+    err "사용법: dbq \"<표시명>\" \"<SQL>\""
+    err "       dbq --list        # 표시명 목록"
+    err "예:     dbq Redshift \"SELECT 1\""
+    exit 1
+}
+
+list_names() {
+    grep -vE '^[[:space:]]*(#|$)' "$HOSTS_FILE" | cut -d: -f1
+}
+
+lower() { printf '%s' "$1" | tr '[:upper:]' '[:lower:]'; }
+
+[[ -f "$HOSTS_FILE" ]] || { err "hosts 파일 없음: $HOSTS_FILE"; exit 1; }
+
+case "${1:-}" in
+    ""|-h|--help) usage ;;
+    -l|--list)    list_names; exit 0 ;;
+esac
+
+[[ $# -eq 2 ]] || usage
+QUERY_NAME="$1"
+SQL="$2"
+qlower=$(lower "$QUERY_NAME")
+
+# 표시명 매칭: 정확 일치 우선, 없으면 부분 일치
+selected=""
+matches=()
+while IFS= read -r line; do
+    [[ -z "$line" || "$line" == \#* ]] && continue
+    name="${line%%:*}"
+    nlower=$(lower "$name")
+    if [[ "$nlower" == "$qlower" ]]; then
+        selected="$line"; break
+    fi
+    if [[ "$nlower" == *"$qlower"* ]]; then
+        matches+=("$line")
+    fi
+done < "$HOSTS_FILE"
+
+if [[ -z "$selected" ]]; then
+    case "${#matches[@]}" in
+        1) selected="${matches[0]}" ;;
+        0) err "매칭되는 서버 없음: '$QUERY_NAME'"; err "사용 가능:"; list_names >&2; exit 1 ;;
+        *) err "여러 서버가 매칭됨. 더 구체적으로 지정하세요:"
+           printf '  %s\n' "${matches[@]%%:*}" >&2; exit 1 ;;
+    esac
+fi
+
+IFS=':' read -r display host port user dbtype dbname <<< "$selected"
+dbtype="${dbtype:-mysql}"
+
+# Keychain 비밀번호 (db-connect.sh 와 동일 서비스)
+pw=$(security find-generic-password -s "mysql-db-connect" -a "$user" -w 2>/dev/null || true)
+if [[ -z "$pw" ]]; then
+    err "Keychain에 비밀번호 없음 (account=$user)."
+    err "저장: security add-generic-password -s \"mysql-db-connect\" -a \"$user\" -w"
+    exit 1
+fi
+
+err "[dbq] $display -> $host:$port ($dbtype${dbname:+/$dbname})"
+
+case "$dbtype" in
+    pg|postgres|postgresql)
+        # psql 위치 해석 (libpq는 keg-only일 수 있어 PATH에 없을 수 있음)
+        psql_bin="$(command -v psql 2>/dev/null || true)"
+        for cand in /opt/homebrew/opt/libpq/bin/psql /usr/local/opt/libpq/bin/psql; do
+            [[ -n "$psql_bin" ]] && break
+            [[ -x "$cand" ]] && psql_bin="$cand"
+        done
+        if [[ -z "$psql_bin" ]]; then
+            err "psql 없음. 설치: brew install libpq"
+            exit 1
+        fi
+        # Redshift는 client_encoding을 UNICODE로 보고 -> utf-8 강제
+        PGPASSWORD="$pw" PGCLIENTENCODING=utf-8 "$psql_bin" \
+            -h "$host" -p "$port" -U "$user" ${dbname:+-d "$dbname"} \
+            -v ON_ERROR_STOP=1 -c "$SQL"
+        ;;
+    *)
+        # mysql: DB명 지정 없으면 기본 DB 없음 -> 쿼리에서 schema.table 로 완전수식 필요
+        MYSQL_PWD="$pw" mysql -h "$host" -P "$port" -u "$user" ${dbname:+"$dbname"} \
+            --table -e "$SQL"
+        ;;
+esac
