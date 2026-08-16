@@ -391,6 +391,29 @@ oh() {
   nvim "$f"
 }
 
+# nh : 노트/블로그/제텔카스텐 명령 치트시트 (헷갈리면 nh)
+nh() {
+  print -P "%F{cyan}── 노트 & 블로그 명령 ──────────────────────────%f"
+  print -P "%F{yellow}[캡처]%f"
+  print    "  n  <제목>    새 노트 (00 Inbox)"
+  print    "  nc <메모>    오늘 일일로그에 한 줄 추가"
+  print -P "%F{yellow}[탐색]%f"
+  print    "  nf           노트 찾아 열기 (fzf 미리보기)"
+  print    "  ng <키워드>  내용 검색해서 그 줄로 열기"
+  print    "  ob           Obsidian 앱 열기"
+  print -P "%F{yellow}[Zettelkasten]  캡처→리뷰→정리→연결%f"
+  print    "  or           Inbox 리뷰 → k보관 / d삭제 / o편집 / q종료"
+  print    "  og           보관 노트를 태그별 폴더로 자동 정리"
+  print    "  oh <주제>    허브(MOC) 노트 생성/열기 → [[링크]]로 연결"
+  print -P "%F{yellow}[블로그]%f"
+  print    "  nb <제목>    새 블로그 글 (50_Blog, 발행 준비 상태)"
+  print    "  npub <경로>  기존 노트를 블로그로 승격"
+  print    "  gpub         블로그 변환+빌드+배포 (한 방)"
+  print -P "%F{yellow}[백업]%f"
+  print    "  vsync        볼트 즉시 커밋+push"
+  print -P "%F{cyan}────────────────────────────────  (헷갈리면 nh)%f"
+}
+
 # nf : 볼트 전체에서 파일명으로 찾아 열기 (fzf + bat 미리보기)
 nf() {
   local f; f=$(cd "$NOTES_DIR" && rg --files -g '*.md' \
