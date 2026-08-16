@@ -337,6 +337,14 @@ publish: true
   mv "$f" "$NOTES_DIR/50_Blog/$(basename "$f")"
   echo "✓ 블로그로 승격 → 50_Blog/$(basename "$f")  (slug/description 확인 후 gpub)"
 }
+# ndel : 발행된 블로그 글 삭제 — 볼트 50_Blog에서 제거 후 gpub하면 사이트에서도 사라짐
+ndel() {
+  local slug="${1%.md}"
+  [[ -z "$slug" ]] && { echo "사용법: ndel <slug>   (예: ndel my-post)"; return 1; }
+  local f="$NOTES_DIR/50_Blog/${slug}.md"
+  [[ -f "$f" ]] || { echo "없음: 50_Blog/${slug}.md  (nf로 파일명 확인)"; return 1; }
+  rm -f "$f" && echo "✓ 삭제: 50_Blog/${slug}.md  → 이제 gpub 하면 사이트에서도 사라짐"
+}
 
 # ── Zettelkasten 흐름 (ZazenCodes 방식 응용) ──────────────────────────
 # or : 00 Inbox 노트를 하나씩 리뷰 → 보관(Fleeting)/삭제/편집
@@ -408,6 +416,7 @@ nh() {
   print -P "%F{yellow}[블로그]%f"
   print    "  nb <제목>    새 블로그 글 (50_Blog, 발행 준비 상태)"
   print    "  npub <경로>  기존 노트를 블로그로 승격"
+  print    "  ndel <slug>  발행 글 삭제 (→ gpub)"
   print    "  gpub         블로그 변환+빌드+배포 (한 방)"
   print -P "%F{yellow}[백업]%f"
   print    "  vsync        볼트 즉시 커밋+push"
