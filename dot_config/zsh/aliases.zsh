@@ -287,8 +287,8 @@ export NOTES_INBOX="$NOTES_DIR/00 Inbox"
 # vsync : 볼트를 지금 즉시 커밋+push (수동 백업). 대화형 셸이라 TCC 제약 없음.
 alias vsync="$HOME/.local/bin/obsidian-vault-sync.sh"
 
-# gpub : 볼트 공개노트(publish:true) → Astro 가든 빌드 + Cloudflare 배포 (한 방)
-alias gpub='(cd ~/30_Projects/01_Personal/garden && npm run publish:site && npm run deploy)'
+# gpub : 볼트 공개노트(publish:true) → Astro 블로그 빌드 + Cloudflare 배포 (한 방)
+alias gpub='(cd ~/30_Projects/01_Personal/blog && npm run publish:site && npm run deploy)'
 
 # n [제목...] : 새 노트를 00 Inbox에 만들고 nvim으로 편집
 n() {
@@ -311,6 +311,31 @@ nc() {
   [[ -z "$line" ]] && return
   printf -- '- %s  %s\n' "$(date +%H:%M)" "$line" >> "$file"
   echo "✓ 추가됨 → ${file:t}"
+}
+# nb : 새 블로그 글 (50_Blog에 발행 준비된 frontmatter로 생성 후 nvim). gpub로 발행.
+nb() {
+  local title slug file
+  title="$*"; [[ -z "$title" ]] && vared -p "블로그 제목: " title
+  [[ -z "$title" ]] && return
+  slug=$(printf '%s' "$title" | tr '[:upper:]' '[:lower:]' \
+        | sed 's/[^a-z0-9]/-/g; s/-\{2,\}/-/g; s/^-//; s/-$//')
+  [[ -z "$slug" ]] && slug="post-$(date +%Y%m%d)"   # 한글 제목이면 slug 직접 수정
+  file="$NOTES_DIR/50_Blog/${slug}.md"
+  mkdir -p "$NOTES_DIR/50_Blog"
+  [[ -f "$file" ]] || printf -- '---\ntitle: %s\ndescription: \ntags: []\npublishDate: %s\npublish: true\nslug: %s\n---\n\n' \
+      "$title" "$(date +%Y-%m-%d)" "$slug" > "$file"
+  nvim "$file"
+}
+# npub : 지금 보는(또는 지정) 볼트 노트를 블로그로 승격 — 50_Blog로 이동 + publish:true 보강
+npub() {
+  local f="$1"; [[ -z "$f" ]] && { echo "사용법: npub <노트경로>"; return 1; }
+  [[ -f "$f" ]] || { echo "파일 없음: $f"; return 1; }
+  mkdir -p "$NOTES_DIR/50_Blog"
+  grep -q '^publish:' "$f" || sed -i '' '1a\
+publish: true
+' "$f"
+  mv "$f" "$NOTES_DIR/50_Blog/$(basename "$f")"
+  echo "✓ 블로그로 승격 → 50_Blog/$(basename "$f")  (slug/description 확인 후 gpub)"
 }
 
 # nf : 볼트 전체에서 파일명으로 찾아 열기 (fzf + bat 미리보기)
