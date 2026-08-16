@@ -312,6 +312,12 @@ nc() {
   printf -- '- %s  %s\n' "$(date +%H:%M)" "$line" >> "$file"
   echo "✓ 추가됨 → ${file:t}"
 }
+# nt : 오늘 메모(일일로그) 바로 열기 (nc로 쌓은 메모 확인·편집)
+nt() {
+  local f="$NOTES_INBOX/$(date +%Y-%m-%d).md"
+  [[ -f "$f" ]] || printf -- '# %s\n\n' "$(date +%Y-%m-%d)" > "$f"
+  nvim "$f"
+}
 # nb : 새 블로그 글 (50_Blog에 발행 준비된 frontmatter로 생성 후 nvim). gpub로 발행.
 nb() {
   local title slug file
@@ -405,6 +411,7 @@ nh() {
   print -P "%F{yellow}[캡처]%f"
   print    "  n  <제목>    새 노트 (00 Inbox)"
   print    "  nc <메모>    오늘 일일로그에 한 줄 추가"
+  print    "  nt           오늘 메모(일일로그) 열기"
   print -P "%F{yellow}[탐색]%f"
   print    "  nf           노트 찾아 열기 (fzf 미리보기)"
   print    "  ng <키워드>  내용 검색해서 그 줄로 열기"
