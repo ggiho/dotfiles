@@ -338,6 +338,59 @@ publish: true
   echo "✓ 블로그로 승격 → 50_Blog/$(basename "$f")  (slug/description 확인 후 gpub)"
 }
 
+# ── Zettelkasten 흐름 (ZazenCodes 방식 응용) ──────────────────────────
+# or : 00 Inbox 노트를 하나씩 리뷰 → 보관(Fleeting)/삭제/편집
+zk_review() {
+  local inbox="$NOTES_DIR/00 Inbox" keep="$NOTES_DIR/40 Zettelkasten/41 Fleeting Notes"
+  mkdir -p "$keep"
+  local files=("$inbox"/*.md(N))
+  (( ${#files} == 0 )) && { echo "Inbox가 비어있다"; return; }
+  local f a
+  for f in $files; do
+    clear
+    echo "── ${f:t} ──   [k]보관  [d]삭제  [o]편집  [s]건너뜀  [q]종료"
+    echo "────────────────────────────────────────────"
+    bat -p --color=always --line-range=:40 "$f" 2>/dev/null || sed -n '1,40p' "$f"
+    echo "────────────────────────────────────────────"
+    read -k 1 "a?선택> "; echo
+    case "$a" in
+      k) mv "$f" "$keep/" && echo "→ 보관 (41 Fleeting Notes)" ;;
+      d) mv "$f" ~/.Trash/ 2>/dev/null || rm -f "$f"; echo "→ 삭제" ;;
+      o) nvim "$f" ;;
+      q) break ;;
+      *) ;;  # s/기타 = 건너뜀
+    esac
+  done
+  echo "리뷰 끝."
+}
+alias or='zk_review'
+
+# og : frontmatter 첫 태그 기준으로 노트를 Permanent Notes/<tag>/ 로 자동 정리
+og() {
+  local src="${1:-$NOTES_DIR/40 Zettelkasten/41 Fleeting Notes}"
+  local base="$NOTES_DIR/40 Zettelkasten/43 Permanent Notes"
+  local f tag
+  for f in "$src"/*.md(N); do
+    tag=$(awk '
+      /^tags:/{ if($0 ~ /\[/){ l=$0; sub(/.*\[/,"",l); sub(/\].*/,"",l); split(l,a,","); t=a[1]; gsub(/[" ]/,"",t); print t; exit } inb=1; next }
+      inb && /^[[:space:]]*-[[:space:]]/{ t=$0; sub(/^[[:space:]]*-[[:space:]]*/,"",t); gsub(/["]/,"",t); print t; exit }
+      inb{ exit }' "$f")
+    if [[ -z "$tag" ]]; then echo "태그 없음, 건너뜀: ${f:t}"; continue; fi
+    mkdir -p "$base/$tag"
+    mv "$f" "$base/$tag/" && echo "→ 43 Permanent/$tag/  (${f:t})"
+  done
+}
+
+# oh : 주제 허브(MOC) 노트 생성/열기 (노트 간 연결의 중심)
+oh() {
+  local title="$*"; [[ -z "$title" ]] && vared -p "허브 주제: " title
+  [[ -z "$title" ]] && return
+  local dir="$NOTES_DIR/40 Zettelkasten/44 MOCs" f
+  mkdir -p "$dir"; f="$dir/${title}.md"
+  [[ -f "$f" ]] || printf -- '---\ntitle: %s\ntype: MOC\ntags: [moc]\n---\n\n# %s (MOC)\n\n## 관련 노트\n\n- \n' "$title" "$title" > "$f"
+  nvim "$f"
+}
+
 # nf : 볼트 전체에서 파일명으로 찾아 열기 (fzf + bat 미리보기)
 nf() {
   local f; f=$(cd "$NOTES_DIR" && rg --files -g '*.md' \
