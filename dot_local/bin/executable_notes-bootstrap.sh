@@ -39,21 +39,32 @@ else
 fi
 
 echo "▶ 5. Obsidian 앱에 볼트 자동 등록"
+OBS_JSON="$HOME/Library/Application Support/obsidian/obsidian.json"
+obsidian_was_running=0
+# obsidian.json은 Obsidian이 종료할 때 덮어쓰므로, 실행 중이면 먼저 종료해야 한다.
 if pgrep -x Obsidian >/dev/null 2>&1; then
-  echo "  ⚠️ Obsidian 실행 중 — 종료 후 다시 실행하세요 (등록 건너뜀)"
-else
-  OBS_JSON="$HOME/Library/Application Support/obsidian/obsidian.json"
-  mkdir -p "${OBS_JSON:h}"
-  [[ -f "$OBS_JSON" ]] || echo '{"vaults":{}}' > "$OBS_JSON"
-  if jq -e --arg p "$VAULT" 'any(.vaults[]; .path==$p)' "$OBS_JSON" >/dev/null 2>&1; then
-    echo "  ✓ 이미 등록됨"
-  else
-    id=$(openssl rand -hex 8)
-    ts=$(( $(date +%s) * 1000 ))
-    jq --arg id "$id" --arg p "$VAULT" --argjson ts "$ts" \
-      '.vaults[$id] = {path:$p, ts:$ts, open:true}' "$OBS_JSON" > "$OBS_JSON.tmp" \
-      && mv "$OBS_JSON.tmp" "$OBS_JSON" && echo "  ✓ 등록 완료 (다음 실행 시 자동 오픈)"
+  obsidian_was_running=1
+  echo "  Obsidian 실행 중 — 종료 후 등록"
+  osascript -e 'tell application "Obsidian" to quit' >/dev/null 2>&1 || true
+  for _ in {1..10}; do pgrep -x Obsidian >/dev/null 2>&1 || break; sleep 0.5; done
+  if pgrep -x Obsidian >/dev/null 2>&1; then
+    echo "  응답 없음 — 강제 종료"; killall Obsidian 2>/dev/null || true; sleep 1
   fi
+fi
+mkdir -p "${OBS_JSON:h}"
+[[ -f "$OBS_JSON" ]] || echo '{"vaults":{}}' > "$OBS_JSON"
+if jq -e --arg p "$VAULT" 'any(.vaults[]; .path==$p)' "$OBS_JSON" >/dev/null 2>&1; then
+  echo "  ✓ 이미 등록됨"
+else
+  id=$(openssl rand -hex 8)
+  ts=$(( $(date +%s) * 1000 ))
+  jq --arg id "$id" --arg p "$VAULT" --argjson ts "$ts" \
+    '.vaults[$id] = {path:$p, ts:$ts, open:true}' "$OBS_JSON" > "$OBS_JSON.tmp" \
+    && mv "$OBS_JSON.tmp" "$OBS_JSON" && echo "  ✓ 등록 완료"
+fi
+# 우리가 종료시켰으면 다시 열어준다 (등록된 볼트로 자동 오픈).
+if (( obsidian_was_running )); then
+  echo "  Obsidian 재실행"; open -a Obsidian >/dev/null 2>&1 || true
 fi
 
 echo "▶ 6. 남은 단계 (딱 하나)"
