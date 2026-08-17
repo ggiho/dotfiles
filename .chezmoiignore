@@ -26,6 +26,9 @@ docs/**
 .config/zsh/tests/**
 .mysqlsh
 .mysqlsh/**
+# --- work-only home area (scaffolded only on the work machine)
+20_Work
+20_Work/**
 {{- end }}
 
 # --- Karabiner legacy config (Kanata only needs the VirtualHIDDevice runtime)
