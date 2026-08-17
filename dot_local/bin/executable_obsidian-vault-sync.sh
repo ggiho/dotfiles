@@ -4,7 +4,7 @@
 # 볼트가 ~/40_Notes (TCC 보호 폴더 밖)라 별도 권한 없이 백그라운드 접근 가능.
 export PATH="/opt/homebrew/bin:/usr/bin:/bin:$PATH"
 cd "$HOME" 2>/dev/null || true          # launchd cwd 이슈 회피
-VAULT="$HOME/40_Notes"
+VAULT="${NOTES_DIR:-$HOME/40_Notes}"
 
 ts() { date '+%F %T'; }
 

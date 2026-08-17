@@ -3,7 +3,7 @@
 # 전제: 먼저 `chezmoi init/apply`로 dotfiles(aliases/nvim/plist)가 적용돼 있어야 함.
 set -uo pipefail
 
-VAULT="$HOME/40_Notes"
+VAULT="${NOTES_DIR:-$HOME/40_Notes}"
 VAULT_REMOTE="https://github.com/ggiho/obsidian-vault.git"
 
 echo "▶ 1. 의존성 확인/설치 (Homebrew)"
