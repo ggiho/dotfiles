@@ -352,6 +352,30 @@ ndel() {
   [[ -f "$f" ]] || { echo "없음: 50_Blog/${slug}.md  (nf로 파일명 확인)"; return 1; }
   rm -f "$f" && echo "✓ 삭제: 50_Blog/${slug}.md  → 이제 gpub 하면 사이트에서도 사라짐"
 }
+# ns <시리즈> : 한 주제(책 등)를 시리즈로 묶어 챕터를 순번대로 쌓는다. 블로그에서 시리즈로 수집됨.
+#   50_Blog/<시리즈>/NN 소제목.md 를 series/seriesOrder/publish:true 로 생성. gpub로 발행.
+ns() {
+  local topic="$*"; [[ -z "$topic" ]] && vared -p "시리즈(책 제목): " topic
+  [[ -z "$topic" ]] && return
+  local dir="$NOTES_DIR/50_Blog/$topic"
+  mkdir -p "$dir"
+  # 다음 순번 = 기존 챕터의 최대 seriesOrder + 1
+  local last=0 o _f
+  for _f in "$dir"/*.md(N); do
+    o=$(awk -F': *' '/^seriesOrder:/{print $2; exit}' "$_f")
+    [[ "$o" == <-> ]] && (( o > last )) && last=$o
+  done
+  local n=$(( last + 1 )) nn; nn=$(printf '%02d' "$n")
+  local sub; vared -p "소제목 (${nn}장): " sub
+  [[ -z "$sub" ]] && return
+  local slug; slug=$(printf '%s' "$topic $nn $sub" | tr '[:upper:]' '[:lower:]' \
+        | sed 's/[^a-z0-9가-힣]/-/g; s/-\{2,\}/-/g; s/^-//; s/-$//')
+  [[ -z "$slug" ]] && slug="series-$(date +%Y%m%d%H%M%S)"
+  local file="$dir/$nn $sub.md"
+  [[ -f "$file" ]] || printf -- '---\ntitle: "%s"\ndescription: ""\ntags: []\nseries: "%s"\nseriesOrder: %d\npublishDate: %s\npublish: true\nslug: %s\n---\n\n# %s\n\n' \
+      "$sub" "$topic" "$n" "$(date +%Y-%m-%d)" "$slug" "$sub" > "$file"
+  nvim "$file"
+}
 
 # ── Zettelkasten 흐름 (ZazenCodes 방식 응용) ──────────────────────────
 # or : 00 Inbox 노트를 하나씩 리뷰 → 보관(Fleeting)/삭제/편집
@@ -423,6 +447,7 @@ nh() {
   print    "  oh <주제>    허브(MOC) 노트 생성/열기 → [[링크]]로 연결"
   print -P "%F{yellow}[블로그]%f"
   print    "  nb <제목>    새 블로그 글 (50_Blog, 발행 준비 상태)"
+  print    "  ns <시리즈>  책 등 주제를 챕터별로 쌓기 (블로그 시리즈로 수집)"
   print    "  npub <경로>  기존 노트를 블로그로 승격"
   print    "  ndel <slug>  발행 글 삭제 (→ gpub)"
   print    "  gpub         블로그 변환+빌드+배포 (한 방)"
