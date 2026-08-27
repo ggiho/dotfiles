@@ -1,26 +1,21 @@
-# vi: ft=dosini
-#
-# This is the single mycli config, managed by chezmoi as dot_myclirc.
-# Do not split settings into ~/.config/mycli/myclirc: mycli loads that first and
-# lets this file override it, and it rewrites this file from the packaged
-# defaults whenever it is missing (MyCli.__init__) -- so those defaults end up
-# shadowing anything kept only under ~/.config.
 [main]
 
 # Enable or disable the automatic displaying of warnings ("SHOW WARNINGS")
 # after executing a SQL statement when applicable.
 show_warnings = False
 
-# Sets the desired behavior for handling secure connections to the database server.
-# Possible values:
-# auto = SSL is preferred. Will attempt to connect via SSL, but will fallback to cleartext as needed.
-# on = SSL is required. Will attempt to connect via SSL and will fail if a secure connection is not established.
-# off = do not use SSL. Will fail if the server requires a secure connection.
-ssl_mode = auto
-
 # Enables context sensitive auto-completion. If this is disabled the all
 # possible completions will be listed.
 smart_completion = True
+
+# Minimum characters typed before offering completion suggestions. A forward
+# slash for a command always offers completions regardless. 1 pops the menu on
+# every keystroke; 3 is the value mycli's own config suggests.
+min_completion_trigger = 3
+
+# Marker appended to indexed column names in the completion menu, so an index
+# is visible while writing the query. Not inserted into the query itself.
+indexed_column_suffix = ' [indexed]'
 
 # Include system schemas (information_schema, performance_schema, mysql, sys)
 # in auto-completion. Enable this if you frequently query system tables using
@@ -102,10 +97,14 @@ null_string = <null>
 # How to align numeric data in tabular output: right or left.
 numeric_alignment = right
 
+# How to display binary values: "hex", or "utf8" to render valid UTF-8 as text
+# and fall back to hex when it is not decodable.
+binary_display = utf8
+
 # A command to run after a successful output redirect, with {} to be replaced
 # with the escaped filename.  Mac example: echo {} | pbcopy.  Escaping is not
 # reliable/safe on Windows.
-post_redirect_command =
+post_redirect_command = ""
 
 # Syntax coloring style. Possible values (many support the "-dark" suffix):
 # manni, igor, xcode, vim, autumn, vs, rrt, native, perldoc, borland, tango, emacs,
@@ -139,8 +138,8 @@ wider_completion_menu = False
 # \u - Username
 # \x1b[...m - insert ANSI escape sequence
 # Catppuccin Mocha — peach user / green host / blue db / mauve arrow (two-line)
-prompt = '\x1b[38;2;250;179;135m\u\x1b[38;2;108;112;134m@\x1b[38;2;166;227;161m\h\x1b[38;2;108;112;134m:\x1b[38;2;137;180;250m\d\x1b[0m\n\x1b[38;2;203;166;247m>\x1b[0m '
-prompt_continuation = '->'
+prompt = "\x1b[38;2;250;179;135m\u\x1b[38;2;108;112;134m@\x1b[38;2;166;227;161m\h\x1b[38;2;108;112;134m:\x1b[38;2;137;180;250m\d\x1b[0m\n\x1b[38;2;203;166;247m>\x1b[0m "
+prompt_continuation = ->
 
 # Skip intro info on startup and outro info on exit
 less_chatty = False
@@ -159,10 +158,7 @@ keyword_casing = auto
 enable_pager = True
 
 # Choose a specific pager
-pager = 'less'
-
-# character set for connections without --charset being set at the CLI
-default_character_set = utf8mb4
+pager = less
 
 # Whether to store and retrieve passwords from the system keyring.
 # See the documentation for https://pypi.org/project/keyring/ for your OS.
@@ -170,34 +166,31 @@ default_character_set = utf8mb4
 # This can be overridden with --use-keyring= at the CLI.
 # A password can be reset with --use-keyring=reset at the CLI.
 use_keyring = False
-
 [keys]
 # possible values: auto, fzf, reverse_isearch
 control_r = auto
-
-# Custom colors for the completion menu, toolbar, etc.
 [colors]
 # Catppuccin Mocha palette
-completion-menu.completion.current = 'bg:#cba6f7 #1e1e2e'
-completion-menu.completion = 'bg:#313244 #cdd6f4'
-completion-menu.meta.completion.current = 'bg:#cba6f7 #1e1e2e'
-completion-menu.meta.completion = 'bg:#45475a #a6adc8'
-completion-menu.multi-column-meta = 'bg:#45475a #cdd6f4'
-scrollbar.arrow = 'bg:#45475a'
-scrollbar = 'bg:#585b70'
-selected = '#cdd6f4 bg:#585b70'
-search = '#1e1e2e bg:#f9e2af'
-search.current = '#1e1e2e bg:#a6e3a1'
-bottom-toolbar = '#a6adc8'
-bottom-toolbar.off = '#585b70'
-bottom-toolbar.on = '#cdd6f4'
-search-toolbar = 'noinherit bold'
-search-toolbar.text = 'nobold'
-system-toolbar = 'noinherit bold'
-arg-toolbar = 'noinherit bold'
-arg-toolbar.text = 'nobold'
-bottom-toolbar.transaction.valid = '#a6e3a1 bold'
-bottom-toolbar.transaction.failed = '#f38ba8 bold'
+completion-menu.completion.current = "bg:#cba6f7 #1e1e2e"
+completion-menu.completion = "bg:#313244 #cdd6f4"
+completion-menu.meta.completion.current = "bg:#cba6f7 #1e1e2e"
+completion-menu.meta.completion = "bg:#45475a #a6adc8"
+completion-menu.multi-column-meta = "bg:#45475a #cdd6f4"
+scrollbar.arrow = "bg:#45475a"
+scrollbar = "bg:#585b70"
+selected = "#cdd6f4 bg:#585b70"
+search = "#1e1e2e bg:#f9e2af"
+search.current = "#1e1e2e bg:#a6e3a1"
+bottom-toolbar = "#a6adc8"
+bottom-toolbar.off = "#585b70"
+bottom-toolbar.on = "#cdd6f4"
+search-toolbar = noinherit bold
+search-toolbar.text = nobold
+system-toolbar = noinherit bold
+arg-toolbar = noinherit bold
+arg-toolbar.text = nobold
+bottom-toolbar.transaction.valid = "#a6e3a1 bold"
+bottom-toolbar.transaction.failed = "#f38ba8 bold"
 
 # style classes for colored table output
 output.header = "#89b4fa bold"
@@ -206,39 +199,35 @@ output.even-row = ""
 output.null = "#585b70"
 
 # SQL syntax highlighting overrides (Catppuccin Mocha)
-sql.comment = 'italic #6c7086'
-sql.comment.multi-line = 'italic #6c7086'
-sql.comment.single-line = 'italic #6c7086'
-sql.keyword = 'bold #cba6f7'
-sql.datatype = '#f9e2af'
-sql.literal = '#fab387'
-sql.literal.date = '#fab387'
-sql.quoted-schema-object = '#89dceb'
-sql.constant = '#fab387'
-sql.function = '#89b4fa'
-sql.variable = '#f5c2e7'
-sql.number = '#fab387'
-sql.number.float = '#fab387'
-sql.number.hex = '#fab387'
-sql.number.integer = '#fab387'
-sql.operator = '#89dceb'
-sql.punctuation = '#9399b2'
-sql.string = '#a6e3a1'
-sql.string.double-quouted = '#a6e3a1'
-sql.string.escape = 'bold #f2cdcd'
-sql.string.single-quoted = '#a6e3a1'
-sql.symbol = '#94e2d5'
-sql.escape = '#f5c2e7'
-
-# Favorite queries.
-# You can add your favorite queries here. They will be available in the
-# REPL when you type `\f` or `\f <query_name>`.
+sql.comment = "italic #6c7086"
+sql.comment.multi-line = "italic #6c7086"
+sql.comment.single-line = "italic #6c7086"
+sql.keyword = "bold #cba6f7"
+sql.datatype = "#f9e2af"
+sql.literal = "#fab387"
+sql.literal.date = "#fab387"
+sql.quoted-schema-object = "#89dceb"
+sql.constant = "#fab387"
+sql.function = "#89b4fa"
+sql.variable = "#f5c2e7"
+sql.number = "#fab387"
+sql.number.float = "#fab387"
+sql.number.hex = "#fab387"
+sql.number.integer = "#fab387"
+sql.operator = "#89dceb"
+sql.punctuation = "#9399b2"
+sql.string = "#a6e3a1"
+sql.string.double-quouted = "#a6e3a1"
+sql.string.escape = "bold #f2cdcd"
+sql.string.single-quoted = "#a6e3a1"
+sql.symbol = "#94e2d5"
+sql.escape = "#f5c2e7"
 [favorite_queries]
 
 # --- Monitoring ---
 ps = "SELECT id, user, host, db, command, time, state, LEFT(info, 80) AS query FROM information_schema.processlist WHERE command != 'Sleep' ORDER BY time DESC"
 psk = "SELECT id, user, host, db, time, state, LEFT(info, 120) AS query FROM information_schema.processlist WHERE command != 'Sleep' AND time > 5 ORDER BY time DESC"
-locks = '''SELECT r.trx_id AS waiting_trx, r.trx_mysql_thread_id AS waiting_pid, r.trx_query AS waiting_query, b.trx_id AS blocking_trx, b.trx_mysql_thread_id AS blocking_pid, b.trx_query AS blocking_query FROM performance_schema.data_lock_waits w JOIN information_schema.innodb_trx b ON b.trx_id = w.BLOCKING_ENGINE_TRANSACTION_ID JOIN information_schema.innodb_trx r ON r.trx_id = w.REQUESTING_ENGINE_TRANSACTION_ID'''
+locks = "SELECT r.trx_id AS waiting_trx, r.trx_mysql_thread_id AS waiting_pid, r.trx_query AS waiting_query, b.trx_id AS blocking_trx, b.trx_mysql_thread_id AS blocking_pid, b.trx_query AS blocking_query FROM performance_schema.data_lock_waits w JOIN information_schema.innodb_trx b ON b.trx_id = w.BLOCKING_ENGINE_TRANSACTION_ID JOIN information_schema.innodb_trx r ON r.trx_id = w.REQUESTING_ENGINE_TRANSACTION_ID"
 trx = "SELECT trx_id, trx_state, trx_started, TIMESTAMPDIFF(SECOND, trx_started, NOW()) AS age_sec, trx_mysql_thread_id AS pid, trx_rows_locked, trx_rows_modified, LEFT(trx_query, 100) AS query FROM information_schema.innodb_trx ORDER BY trx_started"
 
 # --- Table / Schema Info ---
@@ -253,20 +242,11 @@ tstat = "SELECT OBJECT_NAME AS tbl, COUNT_READ AS reads, COUNT_WRITE AS writes, 
 
 # --- Admin ---
 vars = "SHOW GLOBAL VARIABLES LIKE '%$1%'"
-grants = "SHOW GRANTS FOR CURRENT_USER()"
-repl = "SHOW REPLICA STATUS"
-
-# Initial commands to execute when connecting to any database.
+grants = SHOW GRANTS FOR CURRENT_USER()
+repl = SHOW REPLICA STATUS
 [init-commands]
-# read_only = "SET SESSION TRANSACTION READ ONLY"
-
-
-# Use the -d option to reference a DSN.
-# Special characters in passwords and other strings can be escaped with URL encoding.
 [alias_dsn]
-# example_dsn = mysql://[user[:password]@][host][:port][/dbname]
-
-# Initial commands to execute when connecting to a DSN alias.
 [alias_dsn.init-commands]
-# Define one or more SQL statements per alias (semicolon-separated).
-# example_dsn = "SET sql_select_limit=1000; SET time_zone='+00:00'"
+[connection]
+default_ssl_mode = auto
+default_character_set = utf8mb4
