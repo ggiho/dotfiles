@@ -21,7 +21,9 @@ alias sz="source ~/.zshrc"
 alias python="python3"
 alias ob="obsidian"
 alias cc="claude --dangerously-skip-permissions"
-alias pgcli="~/.local/bin/pgcli"
+# pgcli-atuin loads the atuin history patch from ~/.config/pgcli/ext, then runs
+# pgcli. Nothing inside the uv venv is patched, so `uv tool upgrade pgcli` is safe.
+alias pgcli="~/.local/bin/pgcli-atuin"
 alias lg="lazygit"
 
 function yz() {

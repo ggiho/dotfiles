@@ -1,0 +1,6 @@
+#!/bin/sh
+# pgcli with the atuin history patch from ~/.config/pgcli/ext.
+# Nothing inside the uv venv is modified, so `uv tool upgrade pgcli` is safe.
+exec env PYTHONPATH="$HOME/.config/pgcli/ext${PYTHONPATH:+:$PYTHONPATH}" \
+    "$HOME/.local/share/uv/tools/pgcli/bin/python" \
+    -c 'import pgcli_atuin; from pgcli.main import cli; cli()' "$@"
