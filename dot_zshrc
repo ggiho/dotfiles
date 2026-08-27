@@ -23,6 +23,10 @@ source $(brew --prefix)/share/zsh-autosuggestions/zsh-autosuggestions.zsh
 
 # Starship
 export STARSHIP_CONFIG="$HOME/.config/starship/starship.toml"
+
+# mycli 2.x imports llm/openai at startup, which costs ~590ms. Skipping it
+# cuts time-to-prompt from ~1.7s to ~0.85s. Disables the \llm command.
+export MYCLI_LLM_OFF=1
 eval "$(starship init zsh)"
 
 export PATH="/opt/homebrew/opt/mysql-client/bin:$PATH"
