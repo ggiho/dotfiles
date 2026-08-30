@@ -53,12 +53,22 @@ zstyle ':completion:*:descriptions' format '[%d]' # group headers; no escape cod
 zstyle ':completion:*' matcher-list 'm:{a-zA-Z}={A-Za-z}' 'r:|=*' 'l:|=* r:|=*'
 zstyle ':completion:*:git-checkout:*' sort false  # keep git's own ref ordering
 zstyle ':fzf-tab:*' switch-group '<' '>'          # move between groups
+# Tab accepts the highlighted candidate, like plain zsh completion does.
+# fzf-tab binds tab:down by default, and the popup flips it to tab:up when it
+# opens above the cursor (popup-smart-tab), so Tab meant two different things
+# depending on where the popup landed. Move with the arrows / ctrl-n,p instead.
+zstyle ':fzf-tab:*' fzf-bindings 'tab:accept'
+zstyle ':fzf-tab:*' popup-smart-tab no
 zstyle ':fzf-tab:complete:cd:*' fzf-preview 'eza -1 --color=always $realpath'
 # Draw the picker in a tmux popup when inside tmux; plain fzf otherwise.
 # Style the picker itself. The outer border is left off because
 # ftb-tmux-popup already draws one; only the preview gets its own box.
 zstyle ':fzf-tab:*' fzf-flags --layout=reverse --info=inline-right --highlight-line \
   --border=none --marker=✓ ${=FZF_CATPPUCCIN}
+# NOTE: no --footer here. fzf-tab sizes the picker from the candidate count
+# (see lib/-ftb-fzf: lines = compcap + fzf_pad + header_lines), so the extra
+# footer row is unaccounted for and the picker silently falls back to zsh's
+# plain listing. Verified: identical flags minus --footer render correctly.
 [[ -n $TMUX ]] && zstyle ':fzf-tab:*' fzf-command ftb-tmux-popup
 source /opt/homebrew/opt/fzf-tab/share/fzf-tab/fzf-tab.zsh
 
