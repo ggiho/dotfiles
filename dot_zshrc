@@ -32,6 +32,22 @@ else
 fi
 unset _zcompdump_stale
 
+# --- fzf-tab: replaces the completion menu with an fzf picker ---
+# Must load after compinit but before plugins that wrap widgets (autosuggestions
+# below), per the fzf-tab README.
+zstyle ':completion:*' menu no                    # required: lets fzf-tab capture the prefix
+zstyle ':completion:*' group-name ''              # group candidates by type
+zstyle ':completion:*:descriptions' format '[%d]' # group headers; no escape codes, fzf-tab drops them
+# Type either case and still match (zsh-native completions only -- cobra-based
+# tools like chezmoi and gh filter case-sensitively inside their own binary).
+zstyle ':completion:*' matcher-list 'm:{a-zA-Z}={A-Za-z}' 'r:|=*' 'l:|=* r:|=*'
+zstyle ':completion:*:git-checkout:*' sort false  # keep git's own ref ordering
+zstyle ':fzf-tab:*' switch-group '<' '>'          # move between groups
+zstyle ':fzf-tab:complete:cd:*' fzf-preview 'eza -1 --color=always $realpath'
+# Draw the picker in a tmux popup when inside tmux; plain fzf otherwise.
+[[ -n $TMUX ]] && zstyle ':fzf-tab:*' fzf-command ftb-tmux-popup
+source /opt/homebrew/opt/fzf-tab/share/fzf-tab/fzf-tab.zsh
+
 source $(brew --prefix)/share/zsh-syntax-highlighting/zsh-syntax-highlighting.zsh
 ZSH_AUTOSUGGEST_HIGHLIGHT_STYLE='fg=#8a8a8a'
 
