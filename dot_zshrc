@@ -32,6 +32,16 @@ else
 fi
 unset _zcompdump_stale
 
+# --- fzf look (catppuccin mocha, matching ~/.myclirc and the prompt) ---
+# Shared colour string; fzf-tab ignores FZF_DEFAULT_OPTS, so it is applied twice.
+FZF_CATPPUCCIN='--color=bg+:#313244,fg+:#cdd6f4,hl:#f38ba8,hl+:#f38ba8'
+FZF_CATPPUCCIN+=',border:#585b70,separator:#585b70,scrollbar:#585b70'
+FZF_CATPPUCCIN+=',prompt:#cba6f7,pointer:#f5c2e7,marker:#a6e3a1,spinner:#f5c2e7'
+FZF_CATPPUCCIN+=',header:#89b4fa,info:#6c7086,label:#89b4fa'
+# Standalone fzf calls (the just picker and nf note finder in aliases.zsh).
+# --style=full gives bordered input/list/preview sections.
+export FZF_DEFAULT_OPTS="--style=full --layout=reverse --info=inline-right --highlight-line --marker=✓ $FZF_CATPPUCCIN"
+
 # --- fzf-tab: replaces the completion menu with an fzf picker ---
 # Must load after compinit but before plugins that wrap widgets (autosuggestions
 # below), per the fzf-tab README.
@@ -45,6 +55,10 @@ zstyle ':completion:*:git-checkout:*' sort false  # keep git's own ref ordering
 zstyle ':fzf-tab:*' switch-group '<' '>'          # move between groups
 zstyle ':fzf-tab:complete:cd:*' fzf-preview 'eza -1 --color=always $realpath'
 # Draw the picker in a tmux popup when inside tmux; plain fzf otherwise.
+# Style the picker itself. The outer border is left off because
+# ftb-tmux-popup already draws one; only the preview gets its own box.
+zstyle ':fzf-tab:*' fzf-flags --layout=reverse --info=inline-right --highlight-line \
+  --border=none --marker=✓ ${=FZF_CATPPUCCIN}
 [[ -n $TMUX ]] && zstyle ':fzf-tab:*' fzf-command ftb-tmux-popup
 source /opt/homebrew/opt/fzf-tab/share/fzf-tab/fzf-tab.zsh
 
