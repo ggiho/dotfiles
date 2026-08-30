@@ -10,6 +10,28 @@ if [ -d "$HOME/.local/bin" ]; then
   esac
 fi
 
+# --- completions ---
+# Nothing called compinit before, so the ~37 completions already on fpath
+# (aws, kubectl, chezmoi, just, gh, docker, uv, ...) were never loaded, and the
+# _bun source below was a no-op because compdef did not exist.
+# brew shellenv appends the same site-functions dir three times; dedupe first.
+typeset -U fpath
+autoload -Uz compinit
+# -i skips insecure files instead of prompting on every shell: Docker.app ships
+# _docker-compose owned by jamfroot, which compaudit rejects and which cannot be
+# chowned because MDM manages it.
+# Rebuild the dump once a day; -C otherwise reuses it and skips the security
+# scan (8ms vs ~350ms). The glob must be assigned to an array -- inside [[ -n ]]
+# zsh does not expand it, so the widely-copied one-liner always takes the slow
+# branch.
+_zcompdump_stale=( $HOME/.zcompdump(N.mh+24) )
+if (( $#_zcompdump_stale )); then
+  compinit -i
+else
+  compinit -C -i
+fi
+unset _zcompdump_stale
+
 source $(brew --prefix)/share/zsh-syntax-highlighting/zsh-syntax-highlighting.zsh
 ZSH_AUTOSUGGEST_HIGHLIGHT_STYLE='fg=#8a8a8a'
 
@@ -34,10 +56,12 @@ export PATH="/opt/homebrew/opt/mysql-client/bin:$PATH"
 # fastfetch
 
 # opencode
-export PATH=/Users/giho/.opencode/bin:$PATH
+# Was hardcoded to /Users/giho, which is not this account's home ($HOME is
+# /Users/giho.seong), so this only ever added a nonexistent dir to PATH.
+[ -d "$HOME/.opencode/bin" ] && export PATH="$HOME/.opencode/bin:$PATH"
 
 # bun completions
-[ -s "/Users/giho/.bun/_bun" ] && source "/Users/giho/.bun/_bun"
+[ -s "$HOME/.bun/_bun" ] && source "$HOME/.bun/_bun"
 
 # bun
 export BUN_INSTALL="$HOME/.bun"
