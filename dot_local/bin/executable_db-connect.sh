@@ -28,11 +28,11 @@ fi
 
 # fzf를 사용하여 서버 선택
 selected=$(printf '%s\n' "${servers[@]}" | fzf \
-    --prompt="DB 서버 선택: " \
+    --prompt="DB server> " \
     --height=15 \
     --layout=reverse \
     --border \
-    --header="↑/↓: 이동, Enter: 선택, Esc: 취소")
+    --header="↑/↓ move · Enter select · Esc cancel")
 
 # 선택하지 않고 종료한 경우
 if [ -z "$selected" ]; then
