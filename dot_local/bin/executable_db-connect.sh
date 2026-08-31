@@ -31,8 +31,9 @@ selected=$(printf '%s\n' "${servers[@]}" | fzf \
     --prompt="DB server> " \
     --height=15 \
     --layout=reverse \
-    --border \
-    --header="↑/↓ move · Enter select · Esc cancel")
+    --header="↑/↓ move · Enter select · Esc cancel" \
+    --header-border=none \
+    --input-border=none)
 
 # 선택하지 않고 종료한 경우
 if [ -z "$selected" ]; then
