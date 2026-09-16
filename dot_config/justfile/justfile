@@ -1,18 +1,283 @@
+# ── Usage notes (2026-09-02, from 28,659 atuin entries) ──────────────────────
+# Nothing is deleted; this is a record of what the history does and does not show
+# being used, so the next cleanup does not have to redo the analysis.
+#
+# Judged by how often the underlying command was run, NOT by recipe name -- the
+# `j` wrapper only started recording recipe names on 2026-08-31, and matching
+# recipe bodies against history gives false positives (old versions of other
+# recipes share generic bash lines).
+#
+#   mysql 307   docker 186   aws dynamodb 95   pgcli 93   mysqlsh 87
+#   aws rds 52  uv run dms 16   pt-osc 7   pt-show-grants 5   mysqlbinlog 5
+#   pg_dump 0   pg_restore 0   psql 0   sysbench 0   ssh -L/-N 0
+#
+# No evidence of use (underlying command never run):
+#   pg-dump-data, pg-dump-no-data, pg-dump-tables, pg-dump-roles,
+#   pg-import-roles, pg-load, pg-load-fast   -- pgcli is used for connecting,
+#                                               but nothing dumps/loads Postgres
+#   sysbench-prepare, sysbench-run, sysbench-cleanup
+#   tunnel-prod, tunnel-prod-writer          -- in prod.just, which is not in
+#                                               git/chezmoi, so removal is final
+#
+# Used, but not through these recipes:
+#   dms-*      `uv run dms` run 16x by hand (diff 13, tables 4, status 1);
+#              11 of the 15 dms recipes cover subcommands never invoked
+#   docker-*   docker run 186x, but as ps 91 / compose 43 / start 13 / run 8;
+#              the recipes cover exec/logs/stats/clean/stop/rmi instead
+#   mysql-binlog-*   mysqlbinlog run 5x by hand; the Keychain fix on 2026-09-01
+#                    removed the password prompts, so these are usable now
+#
+# Confirmed in use: mysqlsh-dump*, mysqlsh-load*, mysql-dump-users,
+#   mysql-import-users, pt-osc, aws-rds-list, rds-zeroetl-params, ddb-*
+# ─────────────────────────────────────────────────────────────────────────────
+
 # ── Path variables ────────────────────────────────────────────────────────────
 HOSTS_FILE      := "$HOME/.config/mysql/hosts"
 SANITIZE_SCRIPT := "$HOME/.config/mysql/sanitize_users.py"
 DDB_SCRIPT_DIR  := env_var_or_default("DDB_SCRIPT_DIR", env_var("HOME") + "/10_Database/AWS/dynamodb")
 DMSCTL_ROOT     := env_var_or_default("DMSCTL_ROOT", env_var("HOME") + "/20_Work/01_Asurion/scripts/aws/dms")
+# Table name list for the ddb-* pickers; ddb-describe and ddb-count both need it.
+DDB_TABLES      := 'aws dynamodb list-tables --query "TableNames[]" --output text | tr "\t" "\n"'
+
+# ddb-describe renders describe-table as a bordered, coloured summary. The jq
+# pass emits tab-separated records (H header / F field / S section / K key /
+# I index / D index-detail) and the awk pass measures them and draws the box --
+# awk is needed because the width is only known after every line exists.
+# explode/implode is jq's only way to insert thousands separators.
+DDB_RECORDS_JQ  := '''
+def commify:
+  tostring | explode | reverse | to_entries
+  | map(if (.key > 0 and .key % 3 == 0) then [44, .value] else [.value] end)
+  | flatten | reverse | implode;
+def human:
+  if . == null then "?"
+  elif . >= 1073741824 then "\((. / 1073741824 * 10 | round / 10)) GB"
+  elif . >= 1048576    then "\((. / 1048576 * 10 | round / 10)) MB"
+  elif . >= 1024       then "\((. / 1024 * 10 | round / 10)) KB"
+  else "\(.) B" end;
+.Table as $t
+| (.TimeToLiveDescription // {}) as $ttl
+| ($t.AttributeDefinitions | map({key: .AttributeName, value: .AttributeType}) | from_entries) as $ty
+| def kl($ks; $kt): ($ks | map(select(.KeyType == $kt)) | first | .AttributeName);
+def keytxt($ks):
+    kl($ks; "HASH") as $h | kl($ks; "RANGE") as $r
+    | "\($h) (\($ty[$h]))" + (if $r then "  +  \($r) (\($ty[$r]))" else "" end);
+  ["H\t\($t.TableName)"]
++ ["F\tstatus\t\($t.TableStatus)"]
++ ["F\titems\t\($t.ItemCount | commify)"]
++ ["F\tsize\t\($t.TableSizeBytes | human)"]
++ ["F\tmode\t" + (if ($t.ProvisionedThroughput.ReadCapacityUnits // 0) > 0
+      then "PROVISIONED   rcu=\($t.ProvisionedThroughput.ReadCapacityUnits)  wcu=\($t.ProvisionedThroughput.WriteCapacityUnits)"
+      else "PAY_PER_REQUEST" end)]
++ (if $ttl.TimeToLiveStatus
+   then ["F\tttl\t" + $ttl.TimeToLiveStatus
+         + (if $ttl.AttributeName then "   (\($ttl.AttributeName))" else "" end)]
+   else [] end)
++ (if $t.DeletionProtectionEnabled then ["F\tprotect\tdelete-protection ON"] else [] end)
++ ["S\tkeys", "K\t" + keytxt($t.KeySchema)]
++ (if (($t.GlobalSecondaryIndexes // []) + ($t.LocalSecondaryIndexes // [])) | length > 0
+   then ["S\tindexes"] else [] end)
++ (($t.GlobalSecondaryIndexes // []) | map(
+     "I\tGSI\t\(.IndexName)\t\(.Projection.ProjectionType // "")",
+     "D\t" + keytxt(.KeySchema)) | flatten)
++ (($t.LocalSecondaryIndexes // []) | map(
+     "I\tLSI\t\(.IndexName)\t",
+     "D\t" + keytxt(.KeySchema)) | flatten)
+| .[]
+'''
+
+DDB_BOX_AWK     := '''
+BEGIN {
+  FS = "\t"
+  # Catppuccin mocha, matching ~/.myclirc and the fzf theme. Empty when the
+  # output is not a terminal so redirected output stays plain.
+  if (COLOR) {
+    B  = "\033[38;2;88;91;112m"    # surface2  border
+    T  = "\033[1;38;2;203;166;247m" # mauve    title
+    L  = "\033[38;2;108;112;134m"  # overlay0  label
+    V  = "\033[38;2;205;214;244m"  # text      value
+    A  = "\033[38;2;137;180;250m"  # blue      key / index name
+    G  = "\033[38;2;166;227;161m"  # green     ACTIVE
+    R  = "\033[38;2;243;139;168m"  # red       not ACTIVE
+    Y  = "\033[38;2;249;226;175m"  # yellow    projection
+    Z  = "\033[0m"
+  }
+}
+{ rec[NR] = $0 }
+function vis(s) { gsub(/\033\[[0-9;]*m/, "", s); return length(s) }
+END {
+  # First pass: build the plain text of every line so the width is known before
+  # any border is drawn.
+  for (i = 1; i <= NR; i++) {
+    n = split(rec[i], f, FS)
+    k = f[1]
+    if (k == "H")      { plain[i] = f[2];                     kind[i] = "H" }
+    else if (k == "F") { plain[i] = sprintf("%-9s %s", f[2], f[3]); kind[i] = "F"; lab[i] = f[2]; val[i] = f[3] }
+    else if (k == "S") { plain[i] = f[2];                     kind[i] = "S" }
+    else if (k == "K") { plain[i] = sprintf("%-9s %s", "PK", f[2]); kind[i] = "K"; val[i] = f[2] }
+    else if (k == "I") { plain[i] = sprintf("%-9s %s%s", f[2], f[3], (f[4] != "" ? "   [" f[4] "]" : "")); kind[i] = "I"; lab[i] = f[2]; val[i] = f[3]; proj[i] = f[4] }
+    else if (k == "D") { plain[i] = sprintf("%-9s %s", "", f[2]); kind[i] = "D"; val[i] = f[2] }
+    if (length(plain[i]) > w) w = length(plain[i])
+  }
+  w += 2
+  head = rec[1]; sub(/^H\t/, "", head)
+  printf "%s╭─ %s%s%s ", B, T, head, B
+  for (i = vis(head) + 3; i < w; i++) printf "─"
+  printf "╮%s\n", Z
+
+  for (i = 2; i <= NR; i++) {
+    if (kind[i] == "S") {
+      printf "%s├─ %s%s%s ", B, L, plain[i], B
+      for (j = vis(plain[i]) + 3; j < w; j++) printf "─"
+      printf "┤%s\n", Z
+      continue
+    }
+    if (kind[i] == "F") {
+      c = V
+      if (lab[i] == "status") c = (val[i] == "ACTIVE" ? G : R)
+      if (lab[i] == "protect") c = Y
+      if (lab[i] == "ttl") c = (val[i] ~ /^ENABLED/ ? Y : L)
+      body = sprintf("%s%-9s%s %s%s%s", L, lab[i], Z, c, val[i], Z)
+    } else if (kind[i] == "K") {
+      body = sprintf("%s%-9s%s %s%s%s", L, "PK", Z, A, val[i], Z)
+    } else if (kind[i] == "I") {
+      body = sprintf("%s%-9s%s %s%s%s", L, lab[i], Z, A, val[i], Z)
+      if (proj[i] != "") body = body sprintf("   %s[%s]%s", Y, proj[i], Z)
+    } else {
+      body = sprintf("%-9s %s%s%s", "", V, val[i], Z)
+    }
+    pad = w - vis(plain[i])
+    printf "%s│%s %s", B, Z, body
+    for (j = 0; j < pad - 1; j++) printf " "
+    printf "%s│%s\n", B, Z
+  }
+  printf "%s╰", B
+  for (i = 0; i < w; i++) printf "─"
+  printf "╯%s\n", Z
+}
+'''
+
+# Host picker + Keychain auth for the Postgres/Redshift recipes. Only pg-typed
+# entries in the hosts file (field 5) are offered.
+PG_CONNECT       := '''
+setup_pg() {
+  local sel raw
+  raw=$(grep -vE "^#|^$" "$HOSTS_FILE" | grep -E ":(pg|postgres|postgresql)(:|$)" \
+    | awk -F: "{printf \"%s\\t%-22s %s:%s/%s\\n\", \$0, \$1, \$2, \$3, \$6}" \
+    | fzf --prompt="pg host> " --height=40% --scheme=default --delimiter="\t" --with-nth=2) || true
+  [ -n "$raw" ] || return 1
+  raw=$(printf "%s\n" "$raw" | cut -f1)
+  export PGHOST=$(printf "%s" "$raw" | cut -d: -f2)
+  export PGPORT=$(printf "%s" "$raw" | cut -d: -f3)
+  export PGUSER=$(printf "%s" "$raw" | cut -d: -f4)
+  export PGDATABASE=$(printf "%s" "$raw" | cut -d: -f6)
+  export PGPASSWORD=$(security find-generic-password -s "mysql-db-connect" -a "$PGUSER" -w 2>/dev/null || true)
+  [ -n "$PGPASSWORD" ] || { echo "No Keychain entry for $PGUSER" >&2; return 1; }
+  [ -n "$PGDATABASE" ] || export PGDATABASE=dev
+  echo ">> $(printf "%s" "$raw" | cut -d: -f1)  ($PGHOST:$PGPORT/$PGDATABASE as $PGUSER)" >&2
+}
+# $PGQ_PYTHON / $PGQ_PY are set by each recipe: a {{...}} inside a raw-string
+# variable is inserted literally, not expanded again, so they cannot be
+# referenced directly from here.
+pgq() { "$PGQ_PYTHON" "$PGQ_PY" "$@"; }
+'''
+
+# Host picker + Keychain auth shared by the mysql-* diagnostics. Sets $host,
+# $port, $user and defines run_sql, which pipes a query through MYSQL_PWD so the
+# password never reaches argv.
+MYSQL_CONNECT    := '''
+pick_host() {
+  # fzf shows the formatted second field but returns the whole line, so the raw
+  # hosts entry survives for parsing. Splitting the display on whitespace does
+  # not work: labels contain spaces ("OnTheGo DEV").
+  local sel
+  sel=$(grep -vE "^#|^$" "$HOSTS_FILE" | grep -vE ":(pg|postgres|postgresql)(:|$)" \
+    | awk -F: "{printf \"%s\\t%-26s %s:%s\\n\", \$0, \$1, \$2, \$3}" \
+    | fzf --prompt="$1> " --height=40% --scheme=default --delimiter="\t" --with-nth=2) || true
+  [ -n "$sel" ] || return 1
+  printf "%s\n" "$sel" | cut -f1
+}
+setup_conn() {
+  local raw
+  # $2, when given, is a raw hosts-file line -- mysql-diff picks the pair once and
+  # hands them down so each comparison does not re-ask.
+  if [ -n "${2:-}" ]; then raw="$2"; else raw=$(pick_host "${1:-host}") || return 1; fi
+  [ -n "$raw" ] || return 1
+  raw_line="$raw"
+  label=$(printf "%s" "$raw" | cut -d: -f1)
+  host=$(printf "%s" "$raw" | cut -d: -f2)
+  port=$(printf "%s" "$raw" | cut -d: -f3)
+  user=$(printf "%s" "$raw" | cut -d: -f4)
+  pw=$(security find-generic-password -s "mysql-db-connect" -a "$user" -w 2>/dev/null || true)
+  [ -n "$pw" ] || { echo "No Keychain entry for $user" >&2; return 1; }
+  # Stay quiet when the caller pre-picked the host: mysql-diff already announced
+  # the pair, and the child recipes would repeat it for every comparison.
+  [ -n "${2:-}" ] || echo ">> $label  ($host:$port as $user)" >&2
+}
+run_sql() { MYSQL_PWD="$pw" mysql -h "$host" -P "$port" -u "$user" --connect-timeout=10 -B "$@"; }
+'''
+
+# Bordered-table renderer shared by every recipe that prints tabular output.
+TABLE_PY        := justfile_directory() + "/lib/table.py"
+# psql is not installed; these run through the pgcli tool venv, which has psycopg.
+PGQ_PY          := justfile_directory() + "/lib/pgq.py"
+PGQ_PYTHON      := env_var_or_default("PGQ_PYTHON", env_var("HOME") + "/.local/share/uv/tools/pgcli/bin/python")
+# Parses the Aurora audit CSV (quoted query field, microsecond timestamps).
+AUDIT_TSV_PY    := justfile_directory() + "/lib/audit_tsv.py"
+
+# Flattens a scan/query response into TSV for DDB_TABLE_PY. DynamoDB values are
+# type-tagged ({S: ...}, {N: ...}, ...), so each has to be unwrapped; containers
+# are shown as a count rather than expanded.
+DDB_ITEMS_JQ    := '''
+def flat:
+  if type != "object" then tostring
+  elif has("S") then .S
+  elif has("N") then .N
+  elif has("BOOL") then (.BOOL | tostring)
+  elif has("NULL") then "null"
+  elif has("L") then "[\(.L | length)]"
+  elif has("M") then "{\(.M | keys | length)}"
+  elif has("SS") then "[\(.SS | length) str]"
+  elif has("NS") then "[\(.NS | length) num]"
+  elif has("B") then "<binary>"
+  else tostring end;
+def trunc($n): if (. | length) > $n then (.[0:$n-1] + "…") else . end;
+(.Items // []) as $items
+| ($items | map(keys) | add // [] | unique) as $allkeys
+| (if $COLS == "" then $allkeys[0:$MAXC] else ($COLS | split(",") | map(ltrimstr(" ") | rtrimstr(" "))) end) as $cols
+| [ ($cols | join("\t")) ]
++ ( $items | map([ $cols[] as $c | (.[$c] as $v
+      # A missing attribute prints empty; an actual NULL-typed value prints
+      # "null", so the two stay distinguishable.
+      | if $v == null then "" else ($v | flat | gsub("[\n\t]"; " ") | trunc($W)) end) ] | join("\t")) )
+| .[]
+'''
+
+# Picker shared by the ddb-* recipes. fzf with --print-query, so a value that is
+# not in the candidate list can still be typed in.
+DDB_PICK        := '''
+pick_or_type() {
+  local out sel
+  out=$(fzf --prompt="$1> " --height=40% --scheme=default --print-query) || true
+  # --print-query puts the typed text on line 1 and the selection on line 2.
+  sel=$(printf '%s\n' "$out" | sed -n 2p)
+  [ -n "$sel" ] || sel=$(printf '%s\n' "$out" | sed -n 1p)
+  printf '%s\n' "$sel"
+}
+'''
 # ──────────────────────────────────────────────────────────────────────────────
 
 # ── Modules ───────────────────────────────────────────────────────────────────
 # RDS/Aurora parameter group + cluster management (use: just rds <recipe>)
-mod? rds '~/10_Database/AWS/rds/terraform/justfile'
+mod? rds '../../10_Database/AWS/rds/terraform/justfile'
+
+# PROD 터널 등 내부 인프라 레시피 (로컬 전용 파일, 없으면 조용히 무시)
+import? 'prod.just'
 # ──────────────────────────────────────────────────────────────────────────────
 
-# [deprecated: use mysqlsh-dump-data instead]
-# hint: host: e.g. aurora-dev.otg.apac.npr.aws.asurion.net
-# hint: user: e.g. giho.seong
+# [deprecated: use mysqlsh-dump instead]
+# hint: host: e.g. <host from ~/.config/mysql/hosts>
+# hint: user: e.g. <db user>
 # hint: database: target schema (empty = user DBs only, excludes mysql/sys/information_schema/performance_schema)
 #
 # mysql-dump-data host user database="":
@@ -37,9 +302,9 @@ mod? rds '~/10_Database/AWS/rds/terraform/justfile'
 #   fi
 #   echo "Written: $out"
 
-# [deprecated: use mysqlsh-dump-no-data instead]
-# hint: host: e.g. aurora-dev.otg.apac.npr.aws.asurion.net
-# hint: user: e.g. giho.seong
+# [deprecated: use mysqlsh-dump-ddl instead]
+# hint: host: e.g. <host from ~/.config/mysql/hosts>
+# hint: user: e.g. <db user>
 # hint: database: target schema (empty = user DBs only, excludes mysql/sys/information_schema/performance_schema)
 #
 # mysql-dump-no-data host user database="":
@@ -64,103 +329,190 @@ mod? rds '~/10_Database/AWS/rds/terraform/justfile'
 #   fi
 #   echo "Written: $out"
 
-# hint: host: e.g. aurora-dev.otg.apac.npr.aws.asurion.net
-# hint: user: e.g. giho.seong
-# hint: database: target schema
-# hint: tables: comma-separated table names (e.g. TABLE1,TABLE2)
-# hint: threads: parallel threads (default: 4)
-# hint: outdir: output directory (default: dump_<database>_tables_<timestamp>)
 
-mysqlsh-dump-tables host user database tables threads="4" outdir="":
+# ── mysqlsh dump ──────────────────────────────────────────────────────────────
+# Two entry points on the CONTENT axis (data vs DDL). SCOPE -- whole instance,
+# one/many schemas, or individual tables -- is picked interactively in both.
+#
+# Renamed 2026-09-16 from mysqlsh-dump-data / -no-data / -tables, whose names
+# mixed the two axes: every one of them already asked for the scope via fzf, so
+# baking "tables" into one name made it unclear which to pick. The three bodies
+# were also copy-pasted, which is how the table drill-down came to exist in only
+# one of them; they now share _mysqlsh-dump-impl.
+#
+#   mysqlsh-dump-data    -> mysqlsh-dump
+#   mysqlsh-dump-no-data -> mysqlsh-dump-ddl
+#   mysqlsh-dump-tables  -> mysqlsh-dump, picking a single schema then its tables
+
+# hint: threads: parallel threads (default: 4)
+# hint: outdir: output directory (default: dump_<scope>_<timestamp>)
+
+[group('mysqlsh')]
+mysqlsh-dump threads="4" outdir="": (_mysqlsh-dump-impl "false" threads outdir)
+
+# hint: threads: parallel threads (default: 4)
+# hint: outdir: output directory (default: dump_<scope>_nodata_<timestamp>)
+
+[group('mysqlsh')]
+mysqlsh-dump-ddl threads="4" outdir="": (_mysqlsh-dump-impl "true" threads outdir)
+
+# Private (leading _): hidden from `just --list`, so it never shows up in the
+# `j` picker. Reached only through the two entry points above.
+_mysqlsh-dump-impl ddl_only threads outdir:
   #!/usr/bin/env bash
   set -euo pipefail
-  timestamp=$(date +%Y%m%d_%H%M%S)
-  out="{{outdir}}"
-  [ -z "$out" ] && out="dump_{{database}}_tables_${timestamp}"
-  IFS=',' read -r -a raw_tbl_array <<< "{{tables}}"
-  [ "${#raw_tbl_array[@]}" -gt 0 ] || { echo "No tables provided" >&2; exit 1; }
-  tbl_array=()
-  for table in "${raw_tbl_array[@]}"; do
-    table=$(printf '%s' "$table" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')
-    [ -z "$table" ] && { echo "Empty table name in tables list" >&2; exit 1; }
-    tbl_array+=("$table")
-  done
-  mysqlsh --host="{{host}}" --user="{{user}}" \
-    -- util dump-tables "{{database}}" "${tbl_array[@]}" \
-    --outputUrl="$out" \
-    --threads={{threads}} --consistent=false --compression=zstd
-  echo "Written: $out/"
-
-# hint: host: e.g. aurora-dev.otg.apac.npr.aws.asurion.net
-# hint: user: e.g. giho.seong
-# hint: database: target schema (empty = dump-instance, auto-excludes mysql/sys/information_schema/performance_schema)
-# hint: threads: parallel threads (default: 4)
-# hint: outdir: output directory (default: dump_<database or all>_<timestamp>)
-
-mysqlsh-dump-data host user database="" threads="4" outdir="":
-  #!/usr/bin/env bash
-  set -euo pipefail
-  timestamp=$(date +%Y%m%d_%H%M%S)
-  out="{{outdir}}"
-  if [ -z "{{database}}" ]; then
-    [ -z "$out" ] && out="dump_all_${timestamp}"
-    mysqlsh --host="{{host}}" --user="{{user}}" \
-      -- util dump-instance "$out" \
-      --threads={{threads}} --consistent=false --compression=zstd
+  ddl_only="{{ddl_only}}"
+  case "$ddl_only" in
+    true)  suffix="_nodata" ;;
+    false) suffix="" ;;
+    *)     echo "ddl_only must be true or false (got: $ddl_only)" >&2; exit 1 ;;
+  esac
+  # Never empty, so expanding it stays safe under `set -u`.
+  common_args=(--threads={{threads}} --consistent=false --compression=zstd)
+  [ "$ddl_only" = true ] && common_args+=(--ddlOnly=true)
+  HOSTS_FILE="{{HOSTS_FILE}}"
+  selected=$(grep -v '^#' "$HOSTS_FILE" | grep -v '^$' | \
+    fzf --prompt="dump host> " --height=40% --scheme=default)
+  [ -z "$selected" ] && exit 0
+  host=$(echo "$selected" | cut -d: -f2)
+  port=$(echo "$selected" | cut -d: -f3)
+  user=$(echo "$selected" | cut -d: -f4)
+  pw=$(security find-generic-password -s "mysql-db-connect" -a "$user" -w 2>/dev/null || true)
+  [ -z "$pw" ] && { echo "Keychain에 비밀번호 없음 (account=$user)" >&2; exit 1; }
+  all_marker="[ALL SCHEMAS (dump-instance)]"
+  # Tab selects several schemas; util dump-schemas takes a list. Picking the ALL
+  # marker switches to dump-instance instead.
+  schemas=$( { echo "$all_marker"; \
+    MYSQL_PWD="$pw" mysql -h "$host" -P "$port" -u "$user" -Nse \
+      "SELECT schema_name FROM information_schema.schemata \
+       WHERE schema_name NOT IN ('mysql','sys','information_schema','performance_schema') \
+       ORDER BY schema_name"; } | \
+    fzf --multi --prompt="dump schemas (Tab=multi)> " --height=50% --scheme=default)
+  [ -z "$schemas" ] && exit 0
+  schema_count=$(printf '%s\n' "$schemas" | grep -c .)
+  if printf '%s\n' "$schemas" | grep -qxF "$all_marker"; then
+    database="$all_marker"
+  elif [ "$schema_count" -eq 1 ]; then
+    database="$schemas"
   else
-    [ -z "$out" ] && out="dump_{{database}}_${timestamp}"
-    mysqlsh --host="{{host}}" --user="{{user}}" \
-      -- util dump-schemas "{{database}}" \
-      --outputUrl="$out" \
-      --threads={{threads}} --consistent=false --compression=zstd
+    database="multi"
   fi
-  echo "Written: $out/"
-
-# hint: host: e.g. aurora-dev.otg.apac.npr.aws.asurion.net
-# hint: user: e.g. giho.seong
-# hint: database: target schema (empty = dump-instance, auto-excludes mysql/sys/information_schema/performance_schema)
-# hint: threads: parallel threads (default: 4)
-# hint: outdir: output directory (default: dump_<database or all>_nodata_<timestamp>)
-
-mysqlsh-dump-no-data host user database="" threads="4" outdir="":
-  #!/usr/bin/env bash
-  set -euo pipefail
+  all_tbl_marker="[ALL TABLES]"
+  tbl_array=()
+  # A single schema can be narrowed to individual tables. Several schemas (or the
+  # ALL marker) stay on the whole-schema path, since util dump-tables takes one
+  # schema at a time.
+  if [ "$database" != "$all_marker" ] && [ "$schema_count" -eq 1 ]; then
+    # -D connects to the schema so DATABASE() supplies it; the name is never
+    # interpolated into SQL. Avoids backslash-escaped quotes, which the `j`
+    # wrapper's re-quoting turns into an unterminated string.
+    mapfile -t tbl_picks < <( { echo "$all_tbl_marker"; \
+      MYSQL_PWD="$pw" mysql -h "$host" -P "$port" -u "$user" -D "$database" -Nse \
+        "SELECT table_name FROM information_schema.tables \
+         WHERE table_schema=DATABASE() AND table_type='BASE TABLE' \
+         ORDER BY table_name"; } \
+      | fzf --multi --prompt="dump tables (Tab=multi, Esc=cancel)> " --height=60% --scheme=default \
+      | grep .)
+    [ "${#tbl_picks[@]}" -gt 0 ] || { echo "No tables selected" >&2; exit 0; }
+    if ! printf '%s\n' "${tbl_picks[@]}" | grep -qxF "$all_tbl_marker"; then
+      tbl_array=("${tbl_picks[@]}")
+    fi
+  fi
   timestamp=$(date +%Y%m%d_%H%M%S)
   out="{{outdir}}"
-  if [ -z "{{database}}" ]; then
-    [ -z "$out" ] && out="dump_all_nodata_${timestamp}"
-    mysqlsh --host="{{host}}" --user="{{user}}" \
-      -- util dump-instance "$out" \
-      --threads={{threads}} --consistent=false --compression=zstd --ddlOnly=true
+  dump_log=$(mktemp)
+  trap 'rm -f "$dump_log"' EXIT
+  if [ "${#tbl_array[@]}" -gt 0 ]; then
+    [ -z "$out" ] && out="dump_${database}_tables${suffix}_${timestamp}"
+    echo "Dumping ${#tbl_array[@]} table(s) from ${database}..."
+    printf '%s\n' "$pw" | mysqlsh --host="$host" --port="$port" --user="$user" --passwords-from-stdin \
+      -- util dump-tables "$database" "${tbl_array[@]}" \
+      --outputUrl="$out" "${common_args[@]}" 2>&1 | tee "$dump_log"
+  elif [ "$database" = "$all_marker" ]; then
+    [ -z "$out" ] && out="dump_all${suffix}_${timestamp}"
+    printf '%s\n' "$pw" | mysqlsh --host="$host" --port="$port" --user="$user" --passwords-from-stdin \
+      -- util dump-instance "$out" "${common_args[@]}" 2>&1 | tee "$dump_log"
   else
-    [ -z "$out" ] && out="dump_{{database}}_nodata_${timestamp}"
-    mysqlsh --host="{{host}}" --user="{{user}}" \
-      -- util dump-schemas "{{database}}" \
-      --outputUrl="$out" \
-      --threads={{threads}} --consistent=false --compression=zstd --ddlOnly=true
+    if [ "$schema_count" -eq 1 ]; then
+      [ -z "$out" ] && out="dump_${database}${suffix}_${timestamp}"
+    else
+      [ -z "$out" ] && out="dump_${schema_count}schemas${suffix}_${timestamp}"
+    fi
+    # Word splitting is what turns the newline-separated picks into separate
+    # arguments, so build an array rather than interpolating the variable.
+    mapfile -t schema_args < <(printf '%s\n' "$schemas" | grep .)
+    printf '%s\n' "$pw" | mysqlsh --host="$host" --port="$port" --user="$user" --passwords-from-stdin \
+      -- util dump-schemas "${schema_args[@]}" \
+      --outputUrl="$out" "${common_args[@]}" 2>&1 | tee "$dump_log"
+  fi
+  # The `j` wrapper used to strip `set -euo pipefail` from the recipe, so a failed
+  # mysqlsh did not abort the script. That is fixed, but scanning the output is
+  # kept as a belt-and-braces check since mysqlsh's exit status was never verified.
+  if grep -qE '^ERROR: ' "$dump_log"; then
+    echo "Dump failed: $out" >&2
+    exit 1
   fi
   echo "Written: $out/"
 
 # hint: host: e.g. aurora-skt-otg-uat-cluster.cluster-czdk59pd0a4y.ap-northeast-2.rds.amazonaws.com
-# hint: user: e.g. giho.seong
-# hint: indir: dump directory from mysqlsh-dump-data
+# hint: user: e.g. <db user>
+# hint: port: server port (default: 3306; tunneled hosts e.g. Horizon PROD use 13306)
 # hint: threads: parallel threads (default: 4)
 # hint: target_schema: optional schema to load into; leave empty to use dump schema
-# hint: on_exist: existing objects -> error (default) | drop (drop & reload) | ignore (skip)
+# hint: on_exist: existing objects -> error (default) | drop (drop & recreate) | ignore (skip)
+# hint: force_drop: allow on_exist=drop on a DDL-only dump (= empties the tables); default false
+# note: on_exist=drop on a ddlOnly dump is refused -- it drops live rows with nothing to reload
+# note: dump directory is picked via fzf (searches ./ up to 2 levels for @.json); none found -> type path
 
-mysqlsh-load host user indir threads="4" target_schema="" on_exist="error":
+[group('mysqlsh')]
+[confirm("Load dump into " + host + " (schema: " + target_schema + ", on_exist=" + on_exist + ")?")]
+mysqlsh-load host user port="3306" threads="4" target_schema="" on_exist="error" force_drop="false":
   #!/usr/bin/env bash
   set -euo pipefail
 
+  mapfile -t dumps < <(find . -maxdepth 2 -type f -name '@.json' 2>/dev/null | sed 's:/@\.json$::' | sort)
+  if [ "${#dumps[@]}" -gt 0 ]; then
+    indir=$(printf '%s\n' "${dumps[@]}" | \
+      fzf --prompt="load dir> " --height=40% --scheme=default)
+  else
+    read -rp "dump directory (경로 직접 입력): " indir
+  fi
+  [ -z "$indir" ] && exit 0
+  [ -d "$indir" ] || { echo "디렉토리 없음: $indir" >&2; exit 1; }
+
   target_schema="{{target_schema}}"
-  progress_file="{{indir}}/.load_progress"
+  # mysqlsh ties a progress file to the target server's UUID, so one dump loaded
+  # into several environments must not share it (MYSQLSH 53027). Key the name by
+  # host:port as well as schema.
+  safe_target=$(printf '%s' "{{host}}:{{port}}" | tr -c 'A-Za-z0-9_.-' '_')
+  progress_file="$indir/.load_progress_${safe_target}"
   load_args=(
-    -- util load-dump "{{indir}}"
+    -- util load-dump "$indir"
     --threads={{threads}}
   )
 
+  # A ddlOnly dump carries no data, so dropExistingObjects on one is a silent
+  # TRUNCATE: mysqlsh drops the live table and recreates it from DDL with nothing
+  # to reload. This bit admin_portal.faq_view on 2026-09-16 -- 577 rows loaded at
+  # 15:55 were destroyed by a ddlOnly load at 16:09. Refuse the combination and
+  # make the caller pick: ignore (keep the data) or force_drop=true (knowingly
+  # empty the tables).
+  ddl_only_dump=false
+  if [ -f "$indir/@.json" ] && python3 -c "import json,sys; sys.exit(0 if json.load(open('$indir/@.json')).get('options',{}).get('ddlOnly') else 1)" 2>/dev/null; then
+    ddl_only_dump=true
+  fi
+
   case "{{on_exist}}" in
-    drop)     load_args+=(--dropExistingObjects=true) ;;
+    drop)
+      if [ "$ddl_only_dump" = true ] && [ "{{force_drop}}" != "true" ]; then
+        echo "거부: 이 덤프는 DDL만 담고 있습니다 (@.json options.ddlOnly=true)." >&2
+        echo "      on_exist=drop 으로 로드하면 대상 테이블을 drop 후 빈 껍데기로 재생성합니다" >&2
+        echo "      -- 되돌릴 데이터가 덤프에 없으므로 사실상 TRUNCATE 입니다." >&2
+        echo "      데이터를 지키려면: on_exist=ignore" >&2
+        echo "      정말 비우려면  : force_drop=true" >&2
+        exit 1
+      fi
+      load_args+=(--dropExistingObjects=true) ;;
     ignore)   load_args+=(--ignoreExistingObjects=true) ;;
     error|"") ;;
     *) echo "on_exist must be one of: error | drop | ignore" >&2; exit 1 ;;
@@ -168,33 +520,59 @@ mysqlsh-load host user indir threads="4" target_schema="" on_exist="error":
 
   if [ -n "$target_schema" ]; then
     safe_schema=$(printf '%s' "$target_schema" | tr -c 'A-Za-z0-9_.-' '_')
-    progress_file="{{indir}}/.load_progress_${safe_schema}"
+    progress_file="$indir/.load_progress_${safe_target}_${safe_schema}"
     load_args+=(--schema="$target_schema")
   fi
 
   load_args+=(--progressFile="$progress_file")
 
-  mysqlsh --host="{{host}}" --user="{{user}}" "${load_args[@]}"
+  # mysqlsh's exit status alone was never verified as reliable here, so keep the
+  # live output via tee and scan it for "ERROR: MYSQLSH nnnnn" as well.
+  load_log=$(mktemp)
+  trap 'rm -f "$load_log"' EXIT
+  printf '%s\n' "$pw" | mysqlsh --host="{{host}}" --port={{port}} --user="{{user}}" --passwords-from-stdin "${load_args[@]}" 2>&1 | tee "$load_log"
+  if grep -qE '^ERROR: ' "$load_log"; then
+    echo "Load failed: $indir" >&2
+    exit 1
+  fi
   if [ -n "$target_schema" ]; then
-    echo "Loaded: {{indir}} into schema $target_schema"
+    echo "Loaded: $indir into schema $target_schema"
   else
-    echo "Loaded: {{indir}}"
+    echo "Loaded: $indir"
   fi
 
 # hint: host: e.g. aurora-skt-otg-uat-cluster.cluster-czdk59pd0a4y.ap-northeast-2.rds.amazonaws.com
-# hint: user: e.g. giho.seong
-# hint: indir: dump directory from mysqlsh-dump-tables
+# hint: user: e.g. <db user>
+# hint: indir: dump directory from mysqlsh-dump (single schema + tables)
 # hint: target_schema: final schema to move into (e.g. datawarehouse)
 # hint: source_table: dumped table name before rename (e.g. fact_enrollment)
 # hint: target_table: final table name after rename (e.g. fact_enrollment_new)
+# hint: port: server port (default: 3306; tunneled hosts e.g. Horizon PROD use 13306)
 # hint: threads: parallel threads (default: 4)
 
-mysqlsh-load-rename-table host user indir target_schema source_table target_table threads="4":
+[group('mysqlsh')]
+[confirm("Drop and reload " + target_schema + "." + target_table + " on " + host + "?")]
+mysqlsh-load-rename-table host user indir target_schema source_table target_table port="3306" threads="4":
   #!/usr/bin/env bash
   set -euo pipefail
 
   escape_ident() {
     printf '%s' "$1" | sed 's/`/``/g'
+  }
+
+  pw=$(security find-generic-password -s "mysql-db-connect" -a "{{user}}" -w 2>/dev/null || true)
+  [ -z "$pw" ] && { echo "Keychain에 비밀번호 없음 (account={{user}})" >&2; exit 1; }
+
+  # One helper for all four calls: supplies the password once (mysqlsh would
+  # otherwise prompt per invocation) and fails on "ERROR: ..." even when mysqlsh
+  # exits 0, which it does for some errors.
+  run_mysqlsh() {
+    local log rc=0
+    log=$(mktemp)
+    printf '%s\n' "$pw" | mysqlsh --host="{{host}}" --port={{port}} --user="{{user}}" --passwords-from-stdin "$@" 2>&1 | tee "$log" || rc=$?
+    if grep -qE '^ERROR: ' "$log"; then rc=1; fi
+    rm -f "$log"
+    return $rc
   }
 
   timestamp=$(date +%Y%m%d_%H%M%S)
@@ -208,7 +586,7 @@ mysqlsh-load-rename-table host user indir target_schema source_table target_tabl
   cleanup_temp_schema() {
     local cleanup_sql
     printf -v cleanup_sql 'DROP DATABASE IF EXISTS `%s`;' "$tmp_schema_esc"
-    mysqlsh --host="{{host}}" --user="{{user}}" --sql -e "$cleanup_sql"
+    run_mysqlsh --sql -e "$cleanup_sql"
   }
 
   on_error() {
@@ -217,62 +595,1079 @@ mysqlsh-load-rename-table host user indir target_schema source_table target_tabl
   trap on_error ERR
 
   printf -v create_sql 'CREATE DATABASE IF NOT EXISTS `%s`; CREATE DATABASE IF NOT EXISTS `%s`;'     "$tmp_schema_esc" "$target_schema_esc"
-  mysqlsh --host="{{host}}" --user="{{user}}" --sql -e "$create_sql"
+  run_mysqlsh --sql -e "$create_sql"
 
   printf -v load_js 'util.loadDump("%s", {schema: "%s", threads: %s, progressFile: "%s"})'     "{{indir}}" "$temp_schema" "{{threads}}" "$progress_file"
-  mysqlsh --host="{{host}}" --user="{{user}}" --js -e "$load_js"
+  run_mysqlsh --js -e "$load_js"
 
   printf -v rename_sql 'RENAME TABLE `%s`.`%s` TO `%s`.`%s`;'     "$tmp_schema_esc" "$source_table_esc" "$target_schema_esc" "$target_table_esc"
-  mysqlsh --host="{{host}}" --user="{{user}}" --sql -e "$rename_sql"
+  run_mysqlsh --sql -e "$rename_sql"
 
   cleanup_temp_schema
   trap - ERR
   echo "Loaded {{indir}} into {{target_schema}}.{{target_table}} via temp schema $temp_schema"
 
+# MySQL 진단 (읽기 전용)
+
+# 누적 실행시간 기준 느린 쿼리. performance_schema digest 라 slow log 설정과 무관하다.
+# hint: top: 보여줄 쿼리 수 (default: 15)
+# hint: schema: 특정 스키마만 (비우면 전체)
+[group('mysql')]
+mysql-top-queries top="15" schema="":
+  #!/usr/bin/env bash
+  set -euo pipefail
+  HOSTS_FILE="{{HOSTS_FILE}}"
+  {{MYSQL_CONNECT}}
+  setup_conn "host" || exit 0
+  color=1; { [ -t 1 ] && [ -z "${NO_COLOR:-}" ]; } || color=0
+  filter="SCHEMA_NAME IS NOT NULL"
+  [ -n "{{schema}}" ] && filter="SCHEMA_NAME = '"'"'{{schema}}'"'"'"
+  run_sql -e "
+    SELECT SCHEMA_NAME AS \`schema\`,
+           COUNT_STAR AS execs,
+           ROUND(SUM_TIMER_WAIT/1e12, 1) AS total_s,
+           ROUND(AVG_TIMER_WAIT/1e9, 1) AS avg_ms,
+           SUM_ROWS_EXAMINED AS rows_examined,
+           LEFT(REPLACE(DIGEST_TEXT, '\n', ' '), 90) AS query
+    FROM performance_schema.events_statements_summary_by_digest
+    WHERE $filter
+    ORDER BY SUM_TIMER_WAIT DESC LIMIT {{top}}" \
+    | COLOR="$color" CELL=90 python3 "{{TABLE_PY}}"
+
+# 실행 중인 쿼리와 락 대기. 장애 대응용.
+# hint: min_sec: 이 시간 이상 실행 중인 것만 (default: 0 = 전부)
+[group('mysql')]
+mysql-sessions min_sec="0":
+  #!/usr/bin/env bash
+  set -euo pipefail
+  HOSTS_FILE="{{HOSTS_FILE}}"
+  {{MYSQL_CONNECT}}
+  setup_conn "host" || exit 0
+  color=1; { [ -t 1 ] && [ -z "${NO_COLOR:-}" ]; } || color=0
+
+  echo "== connections ==" >&2
+  run_sql -e "
+    SELECT (SELECT VARIABLE_VALUE FROM performance_schema.global_status
+            WHERE VARIABLE_NAME='Threads_connected') AS connected,
+           @@max_connections AS max_conn,
+           (SELECT COUNT(*) FROM information_schema.innodb_trx) AS open_trx" \
+    | COLOR="$color" python3 "{{TABLE_PY}}"
+
+  echo "== running queries ==" >&2
+  run_sql -e "
+    SELECT p.ID AS id, p.USER AS user, p.DB AS db, p.TIME AS sec, p.STATE AS state,
+           LEFT(REPLACE(COALESCE(p.INFO, ''), '\n', ' '), 70) AS query
+    FROM information_schema.PROCESSLIST p
+    WHERE p.COMMAND <> 'Sleep' AND p.ID <> CONNECTION_ID() AND p.TIME >= {{min_sec}}
+    ORDER BY p.TIME DESC" \
+    | COLOR="$color" CELL=70 python3 "{{TABLE_PY}}"
+
+  echo "== lock waits ==" >&2
+  run_sql -e "
+    SELECT r.trx_id AS waiting_trx, r.trx_mysql_thread_id AS waiting_thread,
+           LEFT(r.trx_query, 40) AS waiting_query,
+           b.trx_id AS blocking_trx, b.trx_mysql_thread_id AS blocking_thread,
+           LEFT(COALESCE(b.trx_query, ''), 40) AS blocking_query
+    FROM performance_schema.data_lock_waits w
+    JOIN information_schema.innodb_trx r ON r.trx_id = w.REQUESTING_ENGINE_TRANSACTION_ID
+    JOIN information_schema.innodb_trx b ON b.trx_id = w.BLOCKING_ENGINE_TRANSACTION_ID" \
+    | COLOR="$color" CELL=40 python3 "{{TABLE_PY}}"
+
+# 스키마/테이블 크기 TOP N.
+# hint: top: 보여줄 테이블 수 (default: 20)
+[group('mysql')]
+mysql-size top="20":
+  #!/usr/bin/env bash
+  set -euo pipefail
+  HOSTS_FILE="{{HOSTS_FILE}}"
+  {{MYSQL_CONNECT}}
+  setup_conn "host" || exit 0
+  color=1; { [ -t 1 ] && [ -z "${NO_COLOR:-}" ]; } || color=0
+
+  echo "== by schema ==" >&2
+  run_sql -e "
+    SELECT table_schema AS \`schema\`, COUNT(*) AS tables,
+           ROUND(SUM(data_length)/1048576, 1) AS data_mb,
+           ROUND(SUM(index_length)/1048576, 1) AS index_mb,
+           ROUND(SUM(data_length+index_length)/1048576, 1) AS total_mb
+    FROM information_schema.tables
+    WHERE table_schema NOT IN ('mysql','sys','information_schema','performance_schema')
+    GROUP BY table_schema ORDER BY SUM(data_length+index_length) DESC" \
+    | COLOR="$color" python3 "{{TABLE_PY}}"
+
+  echo "== by table ==" >&2
+  run_sql -e "
+    SELECT table_schema AS \`schema\`, table_name AS \`table\`, table_rows AS \`rows\`,
+           ROUND(data_length/1048576, 1) AS data_mb,
+           ROUND(index_length/1048576, 1) AS index_mb
+    FROM information_schema.tables
+    WHERE table_schema NOT IN ('mysql','sys','information_schema','performance_schema')
+    ORDER BY data_length+index_length DESC LIMIT {{top}}" \
+    | COLOR="$color" python3 "{{TABLE_PY}}"
+
+# 안 쓰는 인덱스와 중복 인덱스. 서버가 재시작된 뒤 통계가 쌓여야 의미가 있다.
+[group('mysql')]
+mysql-unused-indexes:
+  #!/usr/bin/env bash
+  set -euo pipefail
+  HOSTS_FILE="{{HOSTS_FILE}}"
+  {{MYSQL_CONNECT}}
+  setup_conn "host" || exit 0
+  color=1; { [ -t 1 ] && [ -z "${NO_COLOR:-}" ]; } || color=0
+
+  echo "== never used since last restart (sys.schema_unused_indexes) ==" >&2
+  run_sql -e "
+    SELECT object_schema AS \`schema\`, object_name AS \`table\`, index_name AS \`index\`
+    FROM sys.schema_unused_indexes
+    WHERE object_schema NOT IN ('mysql','sys','performance_schema','information_schema')
+    ORDER BY object_schema, object_name" \
+    | COLOR="$color" python3 "{{TABLE_PY}}"
+
+  echo "== uptime (short uptime makes the list above unreliable) ==" >&2
+  run_sql -e "
+    SELECT ROUND(VARIABLE_VALUE/3600, 1) AS uptime_hours
+    FROM performance_schema.global_status WHERE VARIABLE_NAME='Uptime'" \
+    | COLOR="$color" python3 "{{TABLE_PY}}"
+
+# 느린 쿼리 전문 조회
+
+# performance_schema digest 는 90자로 잘려 나오니, 하나를 골라 전문을 본다.
+# DIGEST_TEXT 는 리터럴이 ? 로 정규화되고 performance_schema_max_digest_length
+# (기본 1024자) 에서 잘린다. 리터럴이 든 실제 쿼리는 mysql-slowlog 를 쓴다.
+# hint: top: 고를 후보 수 (default: 30)
+[group('mysql')]
+mysql-query-full top="30":
+  #!/usr/bin/env bash
+  set -euo pipefail
+  HOSTS_FILE="{{HOSTS_FILE}}"
+  {{MYSQL_CONNECT}}
+  setup_conn "host" || exit 0
+
+  # Two columns, not one CONCAT with an embedded tab: batch mode (-B) escapes a
+  # tab inside a value as the two characters \t, which fzf then cannot split on.
+  # Separate columns are emitted with a real tab.
+  sel=$(run_sql -Nse "
+    SELECT DIGEST,
+           CONCAT(LPAD(ROUND(SUM_TIMER_WAIT/1e12,1), 8, ' '), 's  ',
+                  LPAD(COUNT_STAR, 8, ' '), 'x  ',
+                  RPAD(IFNULL(SCHEMA_NAME,'-'), 14, ' '), '  ',
+                  LEFT(REPLACE(DIGEST_TEXT, '\n', ' '), 110))
+    FROM performance_schema.events_statements_summary_by_digest
+    WHERE DIGEST IS NOT NULL
+    ORDER BY SUM_TIMER_WAIT DESC LIMIT {{top}}" \
+    | fzf --prompt="query> " --height=60% --scheme=default --delimiter="\t" --with-nth=2) || true
+  [ -n "$sel" ] || exit 0
+  digest=$(printf '%s\n' "$sel" | cut -f1)
+
+  # -E (vertical) rather than the tab-separated default: one label per line reads
+  # far better for a single row with this many columns.
+  run_sql -E -e "
+    SELECT SCHEMA_NAME, COUNT_STAR, ROUND(SUM_TIMER_WAIT/1e12,3) AS total_s,
+           ROUND(AVG_TIMER_WAIT/1e9,3) AS avg_ms, ROUND(MAX_TIMER_WAIT/1e9,3) AS max_ms,
+           SUM_ROWS_SENT AS rows_sent, SUM_ROWS_EXAMINED AS rows_examined,
+           SUM_NO_INDEX_USED AS no_index_used, FIRST_SEEN, LAST_SEEN
+    FROM performance_schema.events_statements_summary_by_digest
+    WHERE DIGEST = '$digest'" | grep -v '^\*\+ '
+
+  echo
+  echo "── full DIGEST_TEXT ───────────────────────────────────────────────"
+  # -N -r keeps the text raw and unwrapped; the table renderer would truncate it.
+  run_sql -Nre "
+    SELECT DIGEST_TEXT FROM performance_schema.events_statements_summary_by_digest
+    WHERE DIGEST = '$digest'"
+  echo "───────────────────────────────────────────────────────────────────"
+  len=$(run_sql -Nse "SELECT CHAR_LENGTH(DIGEST_TEXT) FROM performance_schema.events_statements_summary_by_digest WHERE DIGEST = '$digest'")
+  limit=$(run_sql -Nse "SELECT @@performance_schema_max_digest_length")
+  echo "length: $len / digest limit: $limit" >&2
+  [ "$len" -ge "$limit" ] && echo "NOTE: at the digest limit, so the text above is cut off." >&2 || true
+
+# Aurora 의 slowquery 로그를 CloudWatch 에서 가져온다. 여기에는 리터럴이 든
+# 쿼리 전문이 그대로 들어 있어서 pt-query-digest 로 바로 분석할 수 있다.
+# hint: cluster: 클러스터 (비우면 slowquery 내보내기가 켜진 것만 fzf)
+# hint: hours: 최근 N시간 (default: 24)
+# hint: digest: true 면 pt-query-digest 분석, 기본은 원문
+[group('mysql')]
+mysql-slowlog cluster="" hours="24" digest="false":
+  #!/usr/bin/env bash
+  set -euo pipefail
+  {{DDB_PICK}}
+
+  cl="{{cluster}}"
+  if [ -z "$cl" ]; then
+    # Only clusters that actually export slowquery; the rest have no log group.
+    cl=$(aws rds describe-db-clusters \
+      --query "DBClusters[?contains(EnabledCloudwatchLogsExports || [], 'slowquery')].DBClusterIdentifier" \
+      --output text | tr '\t' '\n' | sort | pick_or_type "cluster")
+    [ -n "$cl" ] || exit 0
+  fi
+  lg="/aws/rds/cluster/$cl/slowquery"
+  start=$(( ($(date +%s) - {{hours}} * 3600) * 1000 ))
+
+  log=$(mktemp); trap 'rm -f "$log"' EXIT
+  # filter-log-events spans every stream in the group, unlike get-log-events.
+  aws logs filter-log-events --log-group-name "$lg" --start-time "$start" \
+    --query 'events[].message' --output text 2>/dev/null | tr '\t' '\n' > "$log" || true
+
+  if [ ! -s "$log" ]; then
+    echo "No slow queries in $lg over the last {{hours}}h." >&2
+    echo "long_query_time on this cluster may be higher than any query takes." >&2
+    exit 0
+  fi
+  echo ">> $cl: $(grep -c '^# Time:' "$log" || true) slow queries in the last {{hours}}h" >&2
+
+  if [ "{{digest}}" = "true" ]; then
+    pt-query-digest "$log"
+  else
+    cat "$log"
+  fi
+
+# audit 로그에서 키값으로 쿼리 찾기. server_audit_query_log_limit 이 65536 이라
+# digest 의 1024자 상한과 무관하게 전문이 남는다. QUERY 이벤트가 켜져 있어야 한다.
+# hint: value: 찾을 문자열 (주문번호, ID, 테이블명 등)
+# hint: cluster: 비우면 audit 내보내기가 켜진 클러스터만 fzf
+# hint: hours: 최근 N시간 (default: 1 — audit 로그는 GB 단위라 좁게 시작하는 게 좋다)
+# hint: only_query: true 면 QUERY 이벤트만 (READ/TABLE 행 제외)
+[group('mysql')]
+mysql-audit-search value cluster="" hours="1" only_query="true":
+  #!/usr/bin/env bash
+  set -euo pipefail
+  {{DDB_PICK}}
+
+  cl="{{cluster}}"
+  if [ -z "$cl" ]; then
+    cl=$(aws rds describe-db-clusters \
+      --query "DBClusters[?contains(EnabledCloudwatchLogsExports || [], 'audit')].DBClusterIdentifier" \
+      --output text | tr '\t' '\n' | sort | pick_or_type "cluster")
+    [ -n "$cl" ] || exit 0
+  fi
+  lg="/aws/rds/cluster/$cl/audit"
+  size=$(aws logs describe-log-groups --log-group-name-prefix "$lg" \
+    --query 'logGroups[0].storedBytes' --output text 2>/dev/null || echo 0)
+  echo ">> $cl audit ($(( size / 1048576 )) MB stored), last {{hours}}h, pattern: {{value}}" >&2
+
+  start=$(( ($(date +%s) - {{hours}} * 3600) * 1000 ))
+  color=1; { [ -t 1 ] && [ -z "${NO_COLOR:-}" ]; } || color=0
+
+  raw=$(mktemp); trap 'rm -f "$raw"' EXIT
+  # Server-side --filter-pattern keeps the scan on CloudWatch's side; pulling the
+  # whole window down and grepping locally would move gigabytes.
+  aws logs filter-log-events --log-group-name "$lg" --start-time "$start" \
+    --filter-pattern "{{value}}" --query 'events[].message' --output text 2>/dev/null \
+    | tr '\t' '\n' > "$raw" || true
+
+  if [ "{{only_query}}" = "true" ]; then
+    # READ/TABLE rows name the table but carry no SQL, so they trebles the row
+    # count without adding anything when you are after the statement itself.
+    grep -E ',(QUERY|QUERY_DML|QUERY_DDL|QUERY_DCL),' "$raw" > "$raw.q" || true
+    mv "$raw.q" "$raw"
+  fi
+
+  CELL=100 python3 "{{AUDIT_TSV_PY}}" < "$raw" | COLOR="$color" CELL=100 python3 "{{TABLE_PY}}"
+
+# MySQL 환경 비교
+
+# dump/load 후 소스와 타깃의 데이터가 같은지 확인.
+# pt-table-checksum 은 master->replica 모델이라 독립된 두 호스트에는 맞지 않아서
+# CHECKSUM TABLE + COUNT(*) 를 양쪽에서 직접 비교한다.
+# hint: tables: 비교할 테이블 (콤마 구분, 비우면 fzf 다중선택)
+[group('mysql')]
+mysql-checksum tables="" source="" target="":
+  #!/usr/bin/env bash
+  set -euo pipefail
+  HOSTS_FILE="{{HOSTS_FILE}}"
+  {{MYSQL_CONNECT}}
+  sql_on() { local h=$1 p=$2 u=$3 w=$4; shift 4; MYSQL_PWD="$w" mysql -h "$h" -P "$p" -u "$u" --connect-timeout=10 -B "$@"; }
+
+  setup_conn "source host" "{{source}}" || exit 0
+  sh=$host sp=$port su=$user sw=$pw slabel=$label
+  db=$(sql_on "$sh" "$sp" "$su" "$sw" -Nse \
+    "SELECT schema_name FROM information_schema.schemata
+     WHERE schema_name NOT IN ('mysql','sys','information_schema','performance_schema')
+     ORDER BY schema_name" | fzf --prompt="schema> " --height=40% --scheme=default) || true
+  [ -n "$db" ] || exit 0
+
+  all_marker="(all tables)"
+  list_tables() {
+    sql_on "$sh" "$sp" "$su" "$sw" -D "$db" -Nse \
+      "SELECT table_name FROM information_schema.tables
+       WHERE table_schema=DATABASE() AND table_type='BASE TABLE' ORDER BY table_name"
+  }
+  if [ -n "{{tables}}" ]; then
+    tbls=$(printf '%s' "{{tables}}" | tr ',' '\n')
+  else
+    # fzf's Enter returns the highlighted row even with --multi, so an empty
+    # selection cannot mean "all". Offer it as an explicit first entry instead.
+    sel=$( { printf '%s\n' "$all_marker"; list_tables; } \
+      | fzf --multi --prompt="tables (Tab=multi)> " --height=60% --scheme=default) || true
+    [ -n "$sel" ] || exit 0
+    if printf '%s\n' "$sel" | grep -qxF "$all_marker"; then tbls=$(list_tables); else tbls="$sel"; fi
+  fi
+  [ -n "$tbls" ] || exit 0
+
+  setup_conn "target host" "{{target}}" || exit 0
+  th=$host tp=$port tu=$user tw=$pw tlabel=$label
+  color=1; { [ -t 1 ] && [ -z "${NO_COLOR:-}" ]; } || color=0
+  echo ">> ${slabel} -> ${tlabel}   schema: $db   tables: $(printf '%s\n' "$tbls" | grep -c .)" >&2
+
+  # Batch both queries: CHECKSUM TABLE takes a table list, and the counts go in one
+  # UNION ALL. That keeps it at two round trips per host no matter how many tables.
+  qualified=$(printf '%s\n' "$tbls" | grep . | sed "s/.*/\`$db\`.\`&\`/" | paste -sd, -)
+  counts_sql=$(printf '%s\n' "$tbls" | grep . \
+    | awk -v d="$db" '{printf "%sSELECT \"%s\" t, COUNT(*) n FROM `%s`.`%s`", (NR>1 ? " UNION ALL " : ""), $0, d, $0}')
+
+  tmpdir=$(mktemp -d); trap 'rm -rf "$tmpdir"' EXIT
+  sql_on "$sh" "$sp" "$su" "$sw" -Nse "CHECKSUM TABLE $qualified" > "$tmpdir/sc" 2>/dev/null || true
+  sql_on "$th" "$tp" "$tu" "$tw" -Nse "CHECKSUM TABLE $qualified" > "$tmpdir/tc" 2>/dev/null || true
+  sql_on "$sh" "$sp" "$su" "$sw" -Nse "$counts_sql" > "$tmpdir/sn" 2>/dev/null || true
+  sql_on "$th" "$tp" "$tu" "$tw" -Nse "$counts_sql" > "$tmpdir/tn" 2>/dev/null || true
+
+  {
+    printf 'table\tsrc_rows\ttgt_rows\tsrc_checksum\ttgt_checksum\tmatch\n'
+    while IFS= read -r t; do
+      [ -n "$t" ] || continue
+      sc=$(awk -F'\t' -v k="$db.$t" '$1==k {print $2}' "$tmpdir/sc"); [ -n "$sc" ] || sc="missing"
+      tc=$(awk -F'\t' -v k="$db.$t" '$1==k {print $2}' "$tmpdir/tc"); [ -n "$tc" ] || tc="missing"
+      sr=$(awk -F'\t' -v k="$t" '$1==k {print $2}' "$tmpdir/sn"); [ -n "$sr" ] || sr="-"
+      tr=$(awk -F'\t' -v k="$t" '$1==k {print $2}' "$tmpdir/tn"); [ -n "$tr" ] || tr="-"
+      if [ "$sc" = "$tc" ] && [ "$sr" = "$tr" ] && [ "$sc" != "missing" ]; then m="OK"; else m="DIFF"; fi
+      printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$t" "$sr" "$tr" "$sc" "$tc" "$m"
+    done <<< "$tbls"
+  } | COLOR="$color" python3 "{{TABLE_PY}}"
+
+# 환경 비교 진입점. 호스트 쌍을 한 번만 고르고, 무엇을 비교할지 반복해서 고른다.
+# 개별 recipe(mysql-config-diff / -grants-diff / mysql-checksum)도 그대로 쓸 수 있다.
+[group('mysql')]
+mysql-diff:
+  #!/usr/bin/env bash
+  set -euo pipefail
+  HOSTS_FILE="{{HOSTS_FILE}}"
+  {{MYSQL_CONNECT}}
+
+  setup_conn "source host" || exit 0
+  src_raw="$raw_line" src_label="$label"
+  setup_conn "target host" || exit 0
+  tgt_raw="$raw_line" tgt_label="$label"
+  [ "$src_raw" != "$tgt_raw" ] || { echo "Source and target are the same host." >&2; exit 1; }
+
+  echo ">> $src_label  vs  $tgt_label" >&2
+  while true; do
+    what=$(printf '%s\n' \
+      "config    server variables (pt-config-diff)" \
+      "grants    accounts and privileges" \
+      "data      table data (CHECKSUM TABLE + row counts)" \
+      "schema    DDL -- use the db-portal, percona-toolkit has no schema diff" \
+      "quit" \
+      | fzf --prompt="compare> " --height=40% --scheme=default) || break
+    [ -n "$what" ] || break
+    case "${what%% *}" in
+      config) just --justfile "{{justfile()}}" mysql-config-diff "$src_raw" "$tgt_raw" || true ;;
+      grants) just --justfile "{{justfile()}}" mysql-grants-diff "$src_raw" "$tgt_raw" || true ;;
+      data)   just --justfile "{{justfile()}}" mysql-checksum "" "$src_raw" "$tgt_raw" || true ;;
+      schema)
+        # packages/schema-diff is a library with no CLI, so there is nothing to
+        # shell out to -- point at the UI instead of half-reimplementing it here.
+        echo "Schema diff lives in the db-portal (packages/schema-diff):" >&2
+        echo "  cd ~/20_Work/01_Asurion/projects/db-portal && pnpm dev   ->  http://localhost:3000" >&2
+        echo "It compares tables/columns/indexes/constraints/views/routines/triggers/" >&2
+        echo "events/partitions with severity and generates the sync DDL." >&2 ;;
+      quit|*) break ;;
+    esac
+    echo >&2
+  done
+
+# 두 환경의 권한 diff. 어느 계정/권한이 한쪽에만 있는지 바로 보인다.
+[group('mysql')]
+mysql-grants-diff source="" target="":
+  #!/usr/bin/env bash
+  set -euo pipefail
+  HOSTS_FILE="{{HOSTS_FILE}}"
+  {{MYSQL_CONNECT}}
+
+  setup_conn "source host" "{{source}}" || exit 0
+  sh=$host sp=$port su=$user sw=$pw slabel=$label
+  setup_conn "target host" "{{target}}" || exit 0
+  th=$host tp=$port tu=$user tw=$pw tlabel=$label
+  color=1; { [ -t 1 ] && [ -z "${NO_COLOR:-}" ]; } || color=0
+
+  # Temp 0600 defaults-files: --password would expose the password in ps output.
+  d=$(mktemp -d); trap 'rm -rf "$d"' EXIT
+  chmod 700 "$d"
+  printf '[client]\npassword=%s\n' "$sw" > "$d/s.cnf"
+  printf '[client]\npassword=%s\n' "$tw" > "$d/t.cnf"
+  chmod 600 "$d/s.cnf" "$d/t.cnf"
+
+  # ALTER USER lines carry the password hash and a long PASSWORD EXPIRE tail that
+  # differs cosmetically between servers; keep only the account and DEFAULT ROLE.
+  clean() {
+    grep -vE '^(--|$)' \
+      | sed -E "s/ IDENTIFIED WITH '[^']*'( AS '[^']*')?//; \
+                s/ REQUIRE NONE.*//; s/ PASSWORD EXPIRE.*//" \
+      | sort -u
+  }
+  pt-show-grants --defaults-file="$d/s.cnf" --host="$sh" --port="$sp" --user="$su" | clean > "$d/s.sql"
+  pt-show-grants --defaults-file="$d/t.cnf" --host="$th" --port="$tp" --user="$tu" | clean > "$d/t.sql"
+
+  [ -n "{{source}}" ] || echo ">> $slabel  vs  $tlabel" >&2
+
+  # Accounts present on only one side.
+  acct() { grep -oE '^CREATE (USER|ROLE)[^`]*`[^`]+`(@`[^`]+`)?' "$1" | sed -E 's/^CREATE (USER|ROLE) (IF NOT EXISTS )?//' | sort -u; }
+  {
+    printf 'account\tonly in\n'
+    comm -23 <(acct "$d/s.sql") <(acct "$d/t.sql") | sed "s|\$|\t$slabel|"
+    comm -13 <(acct "$d/s.sql") <(acct "$d/t.sql") | sed "s|\$|\t$tlabel|"
+  } | COLOR="$color" python3 "{{TABLE_PY}}"
+
+  # Grant statements present on only one side, boilerplate already stripped.
+  echo "== statements only in $slabel ==" >&2
+  comm -23 "$d/s.sql" "$d/t.sql" | grep -vE '^CREATE (USER|ROLE)' || true
+  echo "== statements only in $tlabel ==" >&2
+  comm -13 "$d/s.sql" "$d/t.sql" | grep -vE '^CREATE (USER|ROLE)' || true
+
+# 두 환경의 서버 변수 diff (pt-config-diff).
+[group('mysql')]
+mysql-config-diff source="" target="":
+  #!/usr/bin/env bash
+  set -euo pipefail
+  HOSTS_FILE="{{HOSTS_FILE}}"
+  {{MYSQL_CONNECT}}
+
+  setup_conn "source host" "{{source}}" || exit 0
+  sh=$host sp=$port su=$user sw=$pw slabel=$label
+  setup_conn "target host" "{{target}}" || exit 0
+  th=$host tp=$port tu=$user tw=$pw tlabel=$label
+
+  cnf=$(mktemp); d_out=$(mktemp); chmod 600 "$cnf"
+  trap 'rm -f "$cnf" "$d_out"' EXIT
+  printf '[client]\npassword=%s\n' "$sw" > "$cnf"
+
+  [ -n "{{source}}" ] || echo ">> $slabel  vs  $tlabel" >&2
+  # pt-config-diff exits 1 when it finds differences, which is the normal outcome.
+  # Without --ignore-variables every run reports the same four server-identity
+  # differences, which buries the ones that actually matter.
+  # --no-version-check: otherwise every run prints percona's "software updates are
+  # available" block, which is the only output once the real diff is empty.
+  pt-config-diff --defaults-file="$cnf" --no-version-check \
+    --ignore-variables=hostname,server_id,server_uuid,aurora_server_id,report_host,aurora_version \
+    "h=$sh,P=$sp,u=$su" "h=$th,P=$tp,u=$tu" > "$d_out" 2>&1 || true
+  if [ -s "$d_out" ]; then cat "$d_out"; else echo "No differences (server identity variables ignored)."; fi
+
+# Redshift / PostgreSQL
+
+# 테이블이 어느 데이터베이스·스키마에 있는지 찾는다. Redshift 는 같은 이름의
+# 데이터베이스와 스키마가 공존할 수 있어서(예: etldata) 트리에서 헷갈리기 쉽다.
+# hint: name: 테이블명 (부분 일치)
+[group('redshift')]
+redshift-find-table name:
+  #!/usr/bin/env bash
+  set -euo pipefail
+  HOSTS_FILE="{{HOSTS_FILE}}"
+  {{PG_CONNECT}}
+  PGQ_PYTHON="{{PGQ_PYTHON}}"; PGQ_PY="{{PGQ_PY}}"
+  setup_pg || exit 0
+  color=1; { [ -t 1 ] && [ -z "${NO_COLOR:-}" ]; } || color=0
+  pgq "SELECT database_name, schema_name, table_name, table_type
+       FROM svv_all_tables WHERE table_name ILIKE %s ORDER BY 1,2,3" "%{{name}}%" \
+    | COLOR="$color" python3 "{{TABLE_PY}}"
+
+# 유저가 가진 role 과 그 role 의 권한. Redshift 는 RBAC role 과 구식 group 이
+# 따로라서 pg_user/pg_group 만 보는 \du 로는 안 보인다.
+# hint: user: 대상 유저 (비우면 fzf)
+[group('redshift')]
+redshift-grants user="":
+  #!/usr/bin/env bash
+  set -euo pipefail
+  HOSTS_FILE="{{HOSTS_FILE}}"
+  {{PG_CONNECT}}
+  PGQ_PYTHON="{{PGQ_PYTHON}}"; PGQ_PY="{{PGQ_PY}}"
+  {{DDB_PICK}}
+  setup_pg || exit 0
+  color=1; { [ -t 1 ] && [ -z "${NO_COLOR:-}" ]; } || color=0
+
+  u="{{user}}"
+  if [ -z "$u" ]; then
+    u=$(pgq "SELECT usename FROM pg_user ORDER BY 1" | tail -n +2 | pick_or_type "user")
+    [ -n "$u" ] || exit 0
+  fi
+
+  echo "== roles granted to $u ==" >&2
+  pgq "SELECT role_name, admin_option FROM svv_user_grants WHERE user_name = %s ORDER BY 1" "$u" \
+    | COLOR="$color" python3 "{{TABLE_PY}}"
+
+  echo "== groups (legacy) ==" >&2
+  pgq "SELECT g.groname FROM pg_group g JOIN pg_user pu ON pu.usesysid = ANY(g.grolist)
+       WHERE pu.usename = %s ORDER BY 1" "$u" \
+    | COLOR="$color" python3 "{{TABLE_PY}}"
+
+  echo "== schema privileges via those roles ==" >&2
+  pgq "SELECT identity_name AS role, namespace_name AS schema, privilege_type
+       FROM svv_schema_privileges
+       WHERE identity_type = 'role'
+         AND identity_name IN (SELECT role_name FROM svv_user_grants WHERE user_name = %s)
+       ORDER BY 1,2,3" "$u" \
+    | COLOR="$color" python3 "{{TABLE_PY}}"
+
+  # 508 relation rows for one role is normal, so summarise instead of listing.
+  echo "== relation privileges, grouped ==" >&2
+  pgq "SELECT identity_name AS role, namespace_name AS schema, privilege_type,
+              COUNT(*) AS objects
+       FROM svv_relation_privileges
+       WHERE identity_type = 'role'
+         AND identity_name IN (SELECT role_name FROM svv_user_grants WHERE user_name = %s)
+       GROUP BY 1,2,3 ORDER BY 4 DESC" "$u" \
+    | COLOR="$color" python3 "{{TABLE_PY}}"
+
+  echo "== system privileges ==" >&2
+  pgq "SELECT identity_name AS role, system_privilege
+       FROM svv_system_privileges
+       WHERE identity_type = 'role'
+         AND identity_name IN (SELECT role_name FROM svv_user_grants WHERE user_name = %s)
+       ORDER BY 1,2" "$u" \
+    | COLOR="$color" python3 "{{TABLE_PY}}"
+
+# 테이블 크기와 정리 상태. unsorted/stats_off 가 높으면 VACUUM/ANALYZE 대상.
+# hint: schema: 특정 스키마만 (비우면 전체)
+# hint: top: 보여줄 테이블 수 (default: 25)
+[group('redshift')]
+redshift-tables schema="" top="25":
+  #!/usr/bin/env bash
+  set -euo pipefail
+  HOSTS_FILE="{{HOSTS_FILE}}"
+  {{PG_CONNECT}}
+  PGQ_PYTHON="{{PGQ_PYTHON}}"; PGQ_PY="{{PGQ_PY}}"
+  setup_pg || exit 0
+  color=1; { [ -t 1 ] && [ -z "${NO_COLOR:-}" ]; } || color=0
+  pgq "SELECT \"schema\", \"table\", tbl_rows AS rows, size AS mb,
+              ROUND(pct_used, 1) AS pct_used, ROUND(unsorted, 1) AS unsorted_pct,
+              ROUND(stats_off, 1) AS stats_off, diststyle, sortkey1
+       FROM svv_table_info
+       WHERE (%s = '' OR \"schema\" = %s)
+       ORDER BY size DESC LIMIT {{top}}" "{{schema}}" "{{schema}}" \
+    | COLOR="$color" CELL=28 python3 "{{TABLE_PY}}"
+
+# 지금 돌고 있는 쿼리와 WLM 상태.
+[group('redshift')]
+redshift-sessions:
+  #!/usr/bin/env bash
+  set -euo pipefail
+  HOSTS_FILE="{{HOSTS_FILE}}"
+  {{PG_CONNECT}}
+  PGQ_PYTHON="{{PGQ_PYTHON}}"; PGQ_PY="{{PGQ_PY}}"
+  setup_pg || exit 0
+  color=1; { [ -t 1 ] && [ -z "${NO_COLOR:-}" ]; } || color=0
+
+  echo "== running (stv_recents) ==" >&2
+  pgq "SELECT user_name, status, duration, pid, query
+       FROM stv_recents WHERE status = 'Running' ORDER BY duration DESC" \
+    | COLOR="$color" CELL=70 python3 "{{TABLE_PY}}"
+
+  echo "== WLM queue ==" >&2
+  pgq "SELECT service_class, state, COUNT(*) AS queries
+       FROM stv_wlm_query_state GROUP BY 1,2 ORDER BY 1,2" \
+    | COLOR="$color" python3 "{{TABLE_PY}}"
+
+  echo "== disk (stv_partitions) ==" >&2
+  pgq "SELECT SUM(capacity) AS capacity_mb, SUM(used) AS used_mb,
+              ROUND(100.0 * SUM(used) / NULLIF(SUM(capacity), 0), 1) AS pct
+       FROM stv_partitions WHERE part_begin = 0" \
+    | COLOR="$color" python3 "{{TABLE_PY}}"
+
+# 최근 느린 쿼리 (stl_query). Redshift 에는 performance_schema 가 없다.
+# hint: hours: 최근 N시간 (default: 24)
+# hint: top: 보여줄 쿼리 수 (default: 20)
+[group('redshift')]
+redshift-slow hours="24" top="20":
+  #!/usr/bin/env bash
+  set -euo pipefail
+  HOSTS_FILE="{{HOSTS_FILE}}"
+  {{PG_CONNECT}}
+  PGQ_PYTHON="{{PGQ_PYTHON}}"; PGQ_PY="{{PGQ_PY}}"
+  setup_pg || exit 0
+  color=1; { [ -t 1 ] && [ -z "${NO_COLOR:-}" ]; } || color=0
+  pgq "SELECT q.query, TRIM(u.usename) AS user, q.starttime,
+              DATEDIFF(ms, q.starttime, q.endtime) AS ms, q.aborted, TRIM(q.querytxt) AS querytxt
+       FROM stl_query q LEFT JOIN pg_user u ON u.usesysid = q.userid
+       WHERE q.starttime > GETDATE() - INTERVAL '{{hours}} hours'
+       ORDER BY ms DESC LIMIT {{top}}" \
+    | COLOR="$color" CELL=70 python3 "{{TABLE_PY}}"
+
 # DynamoDB
 
-# DynamoDB 테이블 목록 조회
-ddb-list:
-  aws dynamodb list-tables --output table
-
-# fzf로 테이블 선택 후 상세 정보 조회
-ddb-describe:
+# 테이블 목록. 기본은 이름만(빠름), detail=true 면 건수/용량/과금모드까지.
+# hint: detail: true 면 테이블마다 describe-table 을 호출한다 (71개 기준 ~15초)
+[group('dynamodb')]
+ddb-list detail="false":
   #!/usr/bin/env bash
   set -euo pipefail
-  selected=$(aws dynamodb list-tables --output json | \
-    python3 -c "import sys,json; [print(t) for t in json.load(sys.stdin)['TableNames']]" | \
-    fzf --prompt="table> " --height=40% --scheme=default)
-  [ -z "$selected" ] && exit 0
-  aws dynamodb describe-table --table-name "$selected" | python3 -m json.tool
+  color=1
+  { [ -t 1 ] && [ -z "${NO_COLOR:-}" ]; } || color=0
 
-# fzf로 테이블 선택 후 정확한 row 수 조회 (scan count, 대용량 주의)
-ddb-count:
-  #!/usr/bin/env bash
-  set -euo pipefail
-  selected=$(aws dynamodb list-tables --output json | \
-    python3 -c "import sys,json; [print(t) for t in json.load(sys.stdin)['TableNames']]" | \
-    fzf --prompt="table> " --height=40% --scheme=default)
-  [ -z "$selected" ] && exit 0
-  echo ">> counting $selected (scan, may take a while)..."
-  aws dynamodb scan --table-name "$selected" --select COUNT \
-    --query "Count" --output text | xargs -I{} echo "Count: {}"
-
-# hint: source_table: 복사할 원본 테이블
-# hint: new_table: 새로 만들 테이블 이름
-ddb-copy source_table new_table:
-  python3 "{{DDB_SCRIPT_DIR}}/create/copy_table.py" "{{source_table}}" "{{new_table}}" --execute
-
-# hint: source_table: 복사할 원본 테이블
-# hint: new_table: 새로 만들 테이블 이름
-# hint: limit: 복사할 최대 row 수 (default: 전체)
-ddb-copy-data source_table new_table limit="":
-  #!/usr/bin/env bash
-  set -euo pipefail
-  if [ -n "{{limit}}" ]; then
-    python3 "{{DDB_SCRIPT_DIR}}/create/copy_table.py" "{{source_table}}" "{{new_table}}" --data --limit "{{limit}}"
-  else
-    python3 "{{DDB_SCRIPT_DIR}}/create/copy_table.py" "{{source_table}}" "{{new_table}}" --data
+  if [ "{{detail}}" != "true" ]; then
+    # column(1)/pr(1) pad with tabs here, which renders unevenly; lay the names
+    # out column-major with explicit padding instead. COLUMNS is a shell variable
+    # and is not exported into the recipe, so ask the terminal directly.
+    width=$(tput cols 2>/dev/null || echo 100)
+    {{DDB_TABLES}} | awk -v W="$width" '
+      { a[NR] = $0; if (length($0) > m) m = length($0) }
+      END {
+        c = int(W / (m + 2)); if (c < 1) c = 1
+        r = int((NR + c - 1) / c)
+        for (i = 1; i <= r; i++) {
+          line = ""
+          for (j = 0; j < c; j++) { k = i + j * r; if (k <= NR) line = line sprintf("%-*s", m + 2, a[k]) }
+          sub(/ +$/, "", line); print line
+        }
+      }'
+    exit 0
   fi
+
+  # One describe-table per table, 8 at a time -- sequential takes about 4x longer.
+  echo ">> reading $( {{DDB_TABLES}} | grep -c . ) tables..." >&2
+  {
+    printf 'table\titems\tsize\tmode\n'
+    {{DDB_TABLES}} | xargs -P8 -I@ aws dynamodb describe-table --table-name @ \
+      --query "Table.[TableName,ItemCount,TableSizeBytes,ProvisionedThroughput.ReadCapacityUnits]" \
+      --output text \
+      | sort \
+      | awk -F'\t' '{
+          n = $2; s = $3
+          out = ""
+          while (length(n) > 3) { out = "," substr(n, length(n) - 2) out; n = substr(n, 1, length(n) - 3) }
+          items = n out
+          if (s >= 1073741824)   size = sprintf("%.1f GB", s / 1073741824)
+          else if (s >= 1048576) size = sprintf("%.1f MB", s / 1048576)
+          else if (s >= 1024)    size = sprintf("%.1f KB", s / 1024)
+          else                   size = s " B"
+          printf "%s\t%s\t%s\t%s\n", $1, items, size, ($4 > 0 ? "PROVISIONED" : "PAY_PER_REQUEST")
+        }'
+  } | COLOR="$color" python3 "{{TABLE_PY}}"
+
+# hint: table: 조회할 테이블 (비우면 fzf로 선택)
+# hint: full: true 면 describe-table 원문 JSON; 기본은 키/인덱스/건수/용량 요약
+[group('dynamodb')]
+ddb-describe table="" full="false":
+  #!/usr/bin/env bash
+  set -euo pipefail
+  {{DDB_PICK}}
+  tbl="{{table}}"
+  [ -n "$tbl" ] || tbl=$({{DDB_TABLES}} | pick_or_type "table")
+  [ -n "$tbl" ] || exit 0
+  raw=$(aws dynamodb describe-table --table-name "$tbl" --output json)
+  # TTL lives behind its own API. Tolerate failure (e.g. missing permission) --
+  # the ttl row is simply omitted rather than taking the whole recipe down.
+  ttl=$(aws dynamodb describe-time-to-live --table-name "$tbl" --output json 2>/dev/null || printf '{}')
+  raw=$(jq -n --argjson a "$raw" --argjson b "$ttl" '$a + $b')
+  if [ "{{full}}" = "true" ]; then
+    printf '%s\n' "$raw" | jq '.'
+    exit 0
+  fi
+  # Colour only for a terminal, and honour NO_COLOR; redirected output stays plain.
+  color=1
+  { [ -t 1 ] && [ -z "${NO_COLOR:-}" ]; } || color=0
+  printf '%s\n' "$raw" | jq -r '{{DDB_RECORDS_JQ}}' | awk -v COLOR="$color" '{{DDB_BOX_AWK}}'
+
+# 정확한 row 수 (전체 scan). describe-table 의 근사치를 먼저 보여주고 확인을 받는다.
+# hint: table: 조회할 테이블 (비우면 fzf로 선택)
+[group('dynamodb')]
+ddb-count table="":
+  #!/usr/bin/env bash
+  set -euo pipefail
+  {{DDB_PICK}}
+  tbl="{{table}}"
+  [ -n "$tbl" ] || tbl=$({{DDB_TABLES}} | pick_or_type "table")
+  [ -n "$tbl" ] || exit 0
+
+  # ItemCount is free (refreshed roughly every 6 hours) and is usually enough.
+  info=$(aws dynamodb describe-table --table-name "$tbl" --output json)
+  approx=$(printf '%s' "$info" | jq -r '.Table.ItemCount')
+  bytes=$(printf '%s' "$info" | jq -r '.Table.TableSizeBytes')
+  rcu=$(printf '%s' "$info" | jq -r '.Table.ProvisionedThroughput.ReadCapacityUnits // 0')
+  echo "$tbl: ~$approx items, $bytes bytes  (describe-table, ~6h old)"
+
+  # A full scan reads every item. On a PROVISIONED table that easily exceeds the
+  # configured RCU and the CLI gives up mid-way -- which is how this recipe used
+  # to report a wrong number.
+  # Rough cost: a scan reads the whole table, and one RCU covers 8 KB/s of
+  # eventually-consistent reads. Warn only when that runs long enough to matter,
+  # so a tiny provisioned table does not nag.
+  if [ "$rcu" != "0" ]; then
+    est=$(( bytes / (rcu * 8192 + 1) ))
+    if [ "$est" -ge 10 ]; then
+      echo "WARNING: PROVISIONED rcu=$rcu -- scanning $bytes bytes takes ~${est}s at full read capacity and will likely be throttled." >&2
+    fi
+  fi
+  printf 'Run a full scan of %s for the exact count? [y/N] ' "$tbl"
+  read -r reply || reply=""
+  case "$reply" in y|Y|yes|YES) ;; *) echo "Skipped the scan."; exit 0 ;; esac
+
+  # The CLI paginates and applies --query per page, so --output text prints one
+  # Count per page. Summing is required; printing them raw (as this recipe did)
+  # showed several partial numbers instead of a total.
+  total=$(aws dynamodb scan --table-name "$tbl" --select COUNT --query "Count" --output text \
+    | awk '{s += $1} END {print s + 0}')
+  echo "Count: $total"
+
+# 앞쪽 N건만 훑어보기 (키를 몰라도 됨)
+# hint: table: 조회할 테이블 (비우면 fzf로 선택)
+# hint: limit: 가져올 최대 항목 수 (default: 20)
+# hint: cols: 표에 넣을 속성 (콤마 구분, 비우면 앞 6개)
+# hint: full: true 면 원문 JSON
+[group('dynamodb')]
+ddb-scan table="" limit="20" cols="" full="false":
+  #!/usr/bin/env bash
+  set -euo pipefail
+  {{DDB_PICK}}
+  tbl="{{table}}"
+  [ -n "$tbl" ] || tbl=$({{DDB_TABLES}} | pick_or_type "table")
+  [ -n "$tbl" ] || exit 0
+  # --limit (API-side) rather than --max-items (CLI-side): --max-items truncates
+  # the printed items but leaves Count reporting the untruncated page, and adds a
+  # NextToken line.
+  out=$(aws dynamodb scan --table-name "$tbl" --limit "{{limit}}" --output json)
+  if [ "{{full}}" = "true" ]; then
+    printf '%s\n' "$out" | jq '.'
+    exit 0
+  fi
+  color=1
+  { [ -t 1 ] && [ -z "${NO_COLOR:-}" ]; } || color=0
+  printf '%s\n' "$out" \
+    | jq -r --arg COLS "{{cols}}" --argjson MAXC 6 --argjson W 999 '{{DDB_ITEMS_JQ}}' \
+    | COLOR="$color" CELL=24 python3 "{{TABLE_PY}}"
+
+# 키로 조회. 테이블의 키 스키마를 읽어 --key-condition-expression 과
+# --expression-attribute-names/values 를 대신 만들어 준다. 인덱스도 골라서 쓸 수 있다.
+# hint: table: 조회할 테이블 (비우면 fzf로 선택)
+# hint: index: 사용할 인덱스 (비우면 fzf: 기본 테이블 / GSI / LSI 중 선택)
+# hint: pk: 파티션 키 값 (비우면 입력 프롬프트)
+# hint: sk: 정렬 키 값 (비우면 파티션 키만으로 조회)
+# hint: limit: 가져올 최대 항목 수 (default: 20)
+# hint: cols: 표에 넣을 속성 (콤마 구분, 비우면 앞 6개)
+# hint: full: true 면 원문 JSON
+[group('dynamodb')]
+ddb-query table="" index="" pk="" sk="" limit="20" cols="" full="false":
+  #!/usr/bin/env bash
+  set -euo pipefail
+  {{DDB_PICK}}
+  base_marker="(base table)"
+
+  tbl="{{table}}"
+  [ -n "$tbl" ] || tbl=$({{DDB_TABLES}} | pick_or_type "table")
+  [ -n "$tbl" ] || exit 0
+
+  # One describe-table call supplies both the index list and every key schema.
+  schema=$(aws dynamodb describe-table --table-name "$tbl" --output json)
+
+  idx="{{index}}"
+  if [ -z "$idx" ]; then
+    idx_list=$(printf '%s' "$schema" | jq -r '
+      ((.Table.GlobalSecondaryIndexes // []) + (.Table.LocalSecondaryIndexes // []))
+      | .[].IndexName')
+    if [ -n "$idx_list" ]; then
+      idx=$(printf '%s\n%s\n' "$base_marker" "$idx_list" | pick_or_type "index")
+      [ -n "$idx" ] || exit 0
+    else
+      idx="$base_marker"
+    fi
+  fi
+
+  if [ "$idx" = "$base_marker" ]; then
+    keys=$(printf '%s' "$schema" | jq -c '.Table.KeySchema')
+  else
+    keys=$(printf '%s' "$schema" | jq -c --arg i "$idx" '
+      ((.Table.GlobalSecondaryIndexes // []) + (.Table.LocalSecondaryIndexes // []))
+      | map(select(.IndexName == $i)) | .[0].KeySchema // empty')
+    [ -n "$keys" ] || { echo "No such index on $tbl: $idx" >&2; exit 1; }
+  fi
+
+  pk_name=$(printf '%s' "$keys" | jq -r '.[] | select(.KeyType=="HASH")  | .AttributeName')
+  sk_name=$(printf '%s' "$keys" | jq -r '.[] | select(.KeyType=="RANGE") | .AttributeName' )
+  attr_type() {
+    printf '%s' "$schema" | jq -r --arg n "$1" \
+      '.Table.AttributeDefinitions[] | select(.AttributeName==$n) | .AttributeType'
+  }
+
+  # Prompt only with a terminal on stdin. Without the [ -t 0 ] guard a piped or
+  # redirected run hits EOF, `read` returns non-zero, and set -e kills the recipe
+  # with no message -- so passing sk="" to mean "skip" did not work.
+  pkv="{{pk}}"
+  if [ -z "$pkv" ] && [ -t 0 ]; then
+    read -rp "$pk_name (partition key, type $(attr_type "$pk_name")): " pkv || pkv=""
+  fi
+  [ -n "$pkv" ] || { echo "Partition key value is required (3rd argument: pk)" >&2; exit 1; }
+
+  skv="{{sk}}"
+  if [ -z "$skv" ] && [ -n "$sk_name" ] && [ -t 0 ]; then
+    read -rp "$sk_name (sort key, type $(attr_type "$sk_name"), empty = skip): " skv || skv=""
+  fi
+
+  # #aliases avoid clashing with DynamoDB reserved words (name, status, id...).
+  cond='#pk = :pk'
+  names=$(jq -n --arg pn "$pk_name" '{"#pk": $pn}')
+  vals=$(jq -n --arg v "$pkv" --arg t "$(attr_type "$pk_name")" '{":pk": {($t): $v}}')
+  if [ -n "$skv" ]; then
+    cond='#pk = :pk AND #sk = :sk'
+    names=$(printf '%s' "$names" | jq --arg sn "$sk_name" '. + {"#sk": $sn}')
+    vals=$(printf '%s' "$vals" | jq --arg v "$skv" --arg t "$(attr_type "$sk_name")" '. + {":sk": {($t): $v}}')
+  fi
+
+  args=(
+    --table-name "$tbl"
+    --key-condition-expression "$cond"
+    --expression-attribute-names "$names"
+    --expression-attribute-values "$vals"
+    --limit "{{limit}}"
+  )
+  [ "$idx" = "$base_marker" ] || args+=(--index-name "$idx")
+
+  if [ "$idx" = "$base_marker" ]; then label="$tbl"; else label="$tbl [$idx]"; fi
+  echo ">> query $label: $cond" >&2
+  out=$(aws dynamodb query "${args[@]}" --output json)
+  if [ "{{full}}" = "true" ]; then
+    printf '%s\n' "$out" | jq '.'
+    exit 0
+  fi
+  color=1
+  { [ -t 1 ] && [ -z "${NO_COLOR:-}" ]; } || color=0
+  printf '%s\n' "$out" \
+    | jq -r --arg COLS "{{cols}}" --argjson MAXC 6 --argjson W 999 '{{DDB_ITEMS_JQ}}' \
+    | COLOR="$color" CELL=24 python3 "{{TABLE_PY}}"
+
+# 용량 모드 / RCU·WCU 조회 및 변경. rcu=1 짜리 테이블을 전체 scan 하면
+# ProvisionedThroughputExceededException 이 나는데, 그때 여기서 바꾼다.
+# hint: table: 대상 테이블 (비우면 fzf)
+# hint: mode: 비우면 조회만. ondemand | rcu:wcu (예: 25:5)
+[group('dynamodb')]
+ddb-capacity table="" mode="":
+  #!/usr/bin/env bash
+  set -euo pipefail
+  {{DDB_PICK}}
+  tbl="{{table}}"
+  [ -n "$tbl" ] || tbl=$({{DDB_TABLES}} | pick_or_type "table")
+  [ -n "$tbl" ] || exit 0
+  color=1; { [ -t 1 ] && [ -z "${NO_COLOR:-}" ]; } || color=0
+
+  show() {
+    aws dynamodb describe-table --table-name "$1" --output json \
+      | jq -r '.Table as $t
+          | ["table\tmode\trcu\twcu\tsize\titems",
+             "\($t.TableName)\t" +
+             (if ($t.ProvisionedThroughput.ReadCapacityUnits // 0) > 0 then "PROVISIONED" else "PAY_PER_REQUEST" end) +
+             "\t\($t.ProvisionedThroughput.ReadCapacityUnits // 0)\t\($t.ProvisionedThroughput.WriteCapacityUnits // 0)" +
+             "\t\($t.TableSizeBytes)\t\($t.ItemCount)"] | .[]' \
+      | COLOR="$color" python3 "{{TABLE_PY}}"
+  }
+  show "$tbl"
+  [ -n "{{mode}}" ] || exit 0
+
+  case "{{mode}}" in
+    ondemand|PAY_PER_REQUEST) args=(--billing-mode PAY_PER_REQUEST); desc="PAY_PER_REQUEST" ;;
+    *:*) r=${mode%%:*}; w=${mode##*:}
+         args=(--billing-mode PROVISIONED --provisioned-throughput "ReadCapacityUnits=$r,WriteCapacityUnits=$w")
+         desc="PROVISIONED rcu=$r wcu=$w" ;;
+    *) echo "mode must be 'ondemand' or 'rcu:wcu' (e.g. 25:5)" >&2; exit 1 ;;
+  esac
+  # Switching to on-demand is limited to once per 24 hours per table, so make the
+  # change deliberate rather than a side effect of running the recipe.
+  printf 'Change %s to %s? [y/N] ' "$tbl" "$desc"
+  read -r reply || reply=""
+  case "$reply" in y|Y|yes|YES) ;; *) echo "Aborted."; exit 1 ;; esac
+  aws dynamodb update-table --table-name "$tbl" "${args[@]}" --output json | jq -r '.TableDescription.TableStatus'
+  echo ">> update requested; the table stays UPDATING for a while." >&2
+
+# TTL 조회 및 켜기/끄기.
+# hint: table: 대상 테이블 (비우면 fzf)
+# hint: attribute: 켤 때 쓸 속성명 (비우면 조회만)
+# hint: disable: true 면 TTL 끄기
+[group('dynamodb')]
+ddb-ttl table="" attribute="" disable="false":
+  #!/usr/bin/env bash
+  set -euo pipefail
+  {{DDB_PICK}}
+  tbl="{{table}}"
+  [ -n "$tbl" ] || tbl=$({{DDB_TABLES}} | pick_or_type "table")
+  [ -n "$tbl" ] || exit 0
+
+  cur=$(aws dynamodb describe-time-to-live --table-name "$tbl" \
+    --query 'TimeToLiveDescription.[TimeToLiveStatus,AttributeName]' --output text)
+  echo "$tbl: $cur" >&2
+
+  if [ "{{disable}}" = "true" ]; then
+    # Disabling still requires the attribute name that TTL is currently using.
+    attr=$(printf '%s' "$cur" | awk '{print $2}')
+    [ -n "$attr" ] && [ "$attr" != "None" ] || { echo "TTL is not enabled, nothing to disable." >&2; exit 0; }
+    spec="Enabled=false,AttributeName=$attr"; desc="disable TTL ($attr)"
+  elif [ -n "{{attribute}}" ]; then
+    spec="Enabled=true,AttributeName={{attribute}}"; desc="enable TTL on {{attribute}}"
+  else
+    exit 0
+  fi
+
+  printf '%s for %s? [y/N] ' "$desc" "$tbl"
+  read -r reply || reply=""
+  case "$reply" in y|Y|yes|YES) ;; *) echo "Aborted."; exit 1 ;; esac
+  aws dynamodb update-time-to-live --table-name "$tbl" \
+    --time-to-live-specification "$spec" --output json | jq -r '.TimeToLiveSpecification'
+
+# PITR 기반 S3 export. 읽기 용량을 전혀 쓰지 않아서 대용량 PROD 테이블을
+# 세거나 백업할 때 scan 대신 쓴다. PITR 이 켜져 있어야 한다.
+# hint: table: 대상 테이블 (비우면 fzf)
+# hint: bucket: 대상 S3 버킷 (비우면 fzf)
+# hint: prefix: S3 prefix (default: dynamodb_exports/<table>/)
+[group('dynamodb')]
+ddb-export table="" bucket="" prefix="":
+  #!/usr/bin/env bash
+  set -euo pipefail
+  {{DDB_PICK}}
+  tbl="{{table}}"
+  [ -n "$tbl" ] || tbl=$({{DDB_TABLES}} | pick_or_type "table")
+  [ -n "$tbl" ] || exit 0
+
+  pitr=$(aws dynamodb describe-continuous-backups --table-name "$tbl" \
+    --query 'ContinuousBackupsDescription.PointInTimeRecoveryDescription.PointInTimeRecoveryStatus' \
+    --output text 2>/dev/null || echo UNKNOWN)
+  echo "$tbl: PITR $pitr" >&2
+  [ "$pitr" = "ENABLED" ] || { echo "export-table-to-point-in-time needs PITR enabled." >&2; exit 1; }
+
+  bkt="{{bucket}}"
+  [ -n "$bkt" ] || bkt=$(aws s3 ls | awk '{print $3}' | sort | pick_or_type "s3 bucket")
+  [ -n "$bkt" ] || exit 0
+  pfx="{{prefix}}"; [ -n "$pfx" ] || pfx="dynamodb_exports/$tbl/"
+
+  arn=$(aws dynamodb describe-table --table-name "$tbl" --query 'Table.TableArn' --output text)
+  printf 'Export %s to s3://%s/%s ? [y/N] ' "$tbl" "$bkt" "$pfx"
+  read -r reply || reply=""
+  case "$reply" in y|Y|yes|YES) ;; *) echo "Aborted."; exit 1 ;; esac
+
+  out=$(aws dynamodb export-table-to-point-in-time --table-arn "$arn" \
+    --s3-bucket "$bkt" --s3-prefix "$pfx" --export-format DYNAMODB_JSON --output json)
+  printf '%s\n' "$out" | jq -r '.ExportDescription | "status: \(.ExportStatus)\narn:    \(.ExportArn)"'
+  echo ">> manifest-summary.json under the prefix carries the exact itemCount once done." >&2
+
+# YAML 설정으로 테이블 생성. 플래그 없이 실행하면 명령만 출력한다(dry-run).
+# create/*.yaml 이 두 가지 스키마로 섞여 있어서, table_name 이면 dynamodb_builder,
+# base_name+environments 면 multi_env_deploy 로 보낸다.
+# hint: config: YAML 경로 (비우면 create/*.yaml 중 fzf)
+# hint: env: 환경 목록 (콤마 구분). builder 는 DEV,SQA / multi_env 는 Dev,Sqa 표기
+# hint: execute: true 면 실제 생성
+[group('dynamodb')]
+ddb-create config="" env="" execute="false":
+  #!/usr/bin/env bash
+  set -euo pipefail
+  {{DDB_PICK}}
+  dir="{{DDB_SCRIPT_DIR}}/create"
+  cfg="{{config}}"
+  if [ -z "$cfg" ]; then
+    cfg=$(find "$dir" -maxdepth 1 -name '*.yaml' | sort | pick_or_type "config")
+    [ -n "$cfg" ] || exit 0
+  fi
+  [ -f "$cfg" ] || { echo "No such config: $cfg" >&2; exit 1; }
+
+  # One line: a recipe body cannot contain lines starting at column 0, which is
+  # what a multi-line python -c string would produce.
+  kind=$(python3 -c "import yaml,sys; c=yaml.safe_load(open(sys.argv[1])) or {}; print('builder' if 'table_name' in c else 'multienv' if 'base_name' in c else 'unknown')" "$cfg")
+  echo ">> $(basename "$cfg"): $kind schema" >&2
+
+  args=()
+  [ "{{execute}}" = "true" ] && args+=(--execute)
+  case "$kind" in
+    builder)
+      [ -n "{{env}}" ] && args+=(--env "{{env}}")
+      python3 "$dir/dynamodb_builder.py" "$cfg" ${args[@]+"${args[@]}"} ;;
+    multienv)
+      name=$(python3 -c "import yaml,sys; print(yaml.safe_load(open(sys.argv[1]))['base_name'])" "$cfg")
+      [ -n "{{env}}" ] && args+=(--env "{{env}}")
+      python3 "$dir/multi_env_deploy.py" --name "$name" ${args[@]+"${args[@]}"} ;;
+    *)
+      echo "Config has neither table_name nor base_name; cannot tell which tool it is for." >&2
+      exit 1 ;;
+  esac
+  [ "{{execute}}" = "true" ] || echo ">> dry-run only. Pass execute=true to create." >&2
+
+# hint: source_table: 복사할 원본 테이블 (비우면 fzf로 선택)
+# hint: new_table: 새 테이블 이름 (비우면 환경 접미사를 바꾼 후보를 제시)
+[group('dynamodb')]
+ddb-copy source_table="" new_table="":
+  #!/usr/bin/env bash
+  set -euo pipefail
+  {{DDB_PICK}}
+  src="{{source_table}}"
+  [ -n "$src" ] || src=$({{DDB_TABLES}} | pick_or_type "source table")
+  [ -n "$src" ] || exit 0
+  dst="{{new_table}}"
+  [ -n "$dst" ] || dst=$(just --justfile "{{justfile()}}" _ddb-suggest "$src" | pick_or_type "new table")
+  [ -n "$dst" ] || exit 0
+
+  # Confirmed here rather than with [confirm]: that attribute runs before the
+  # body, when the names picked below are not known yet.
+  printf 'Create %s as a schema copy of %s? [y/N] ' "$dst" "$src"
+  read -r reply || reply=""
+  case "$reply" in y|Y|yes|YES) ;; *) echo "Aborted."; exit 1 ;; esac
+
+  python3 "{{DDB_SCRIPT_DIR}}/create/copy_table.py" "$src" "$dst" --execute
+
+# hint: source_table: 복사할 원본 테이블 (비우면 fzf로 선택)
+# hint: new_table: 새 테이블 이름 (비우면 환경 접미사를 바꾼 후보를 제시)
+# hint: limit: 복사할 최대 항목 수 (비우면 선택: 전체 / 100 / 1000 / 10000)
+[group('dynamodb')]
+ddb-copy-data source_table="" new_table="" limit="":
+  #!/usr/bin/env bash
+  set -euo pipefail
+  {{DDB_PICK}}
+  src="{{source_table}}"
+  [ -n "$src" ] || src=$({{DDB_TABLES}} | pick_or_type "source table")
+  [ -n "$src" ] || exit 0
+  dst="{{new_table}}"
+  [ -n "$dst" ] || dst=$(just --justfile "{{justfile()}}" _ddb-suggest "$src" | pick_or_type "new table")
+  [ -n "$dst" ] || exit 0
+
+  all_marker="(all items)"
+  lim="{{limit}}"
+  if [ -z "$lim" ]; then
+    lim=$(printf '%s\n' "$all_marker" 100 1000 10000 100000 | pick_or_type "limit")
+    [ -n "$lim" ] || exit 0
+    [ "$lim" = "$all_marker" ] && lim=""
+  fi
+
+  printf 'Create %s from %s with %s? [y/N] ' "$dst" "$src" "${lim:-all items}"
+  read -r reply || reply=""
+  case "$reply" in y|Y|yes|YES) ;; *) echo "Aborted."; exit 1 ;; esac
+
+  if [ -n "$lim" ]; then
+    python3 "{{DDB_SCRIPT_DIR}}/create/copy_table.py" "$src" "$dst" --data --limit "$lim"
+  else
+    python3 "{{DDB_SCRIPT_DIR}}/create/copy_table.py" "$src" "$dst" --data
+  fi
+
+# Candidate names for ddb-copy: the same base name with the environment suffix
+# swapped, keeping the source's capitalisation (BreachAuditDev -> BreachAuditSqa,
+# GenAIChatDEV -> GenAIChatSQA). Names that already exist are dropped, since both
+# copy recipes create a new table. Private: it only prints candidates.
+[private]
+_ddb-suggest name:
+  #!/usr/bin/env bash
+  set -euo pipefail
+  n="{{name}}"
+  existing=$({{DDB_TABLES}})
+  emit() { printf '%s\n' "$1" | grep -qxF -f <(printf '%s\n' "$existing") || printf '%s\n' "$1"; }
+
+  # Longest suffixes first so "...Prod" is not matched as "...rod".
+  for suf in PROD Prod prod STG Stg stg UAT Uat uat SQA Sqa sqa DEV Dev dev; do
+    case "$n" in
+      *"$suf")
+        base="${n%"$suf"}"
+        for e in DEV SQA UAT STG PROD; do
+          case "$suf" in
+            [A-Z][A-Z]*) out="$base$e" ;;
+            [A-Z]*)      out="$base$(printf '%s' "$e" | cut -c1)$(printf '%s' "$e" | cut -c2- | tr 'A-Z' 'a-z')" ;;
+            *)           out="$base$(printf '%s' "$e" | tr 'A-Z' 'a-z')" ;;
+          esac
+          [ "$out" = "$n" ] || emit "$out"
+        done
+        exit 0 ;;
+    esac
+  done
+  # No environment suffix to swap: offer the common shapes instead.
+  for e in Copy DEV SQA UAT; do emit "$n$e"; done
+
 
 # sysbench
 
@@ -281,6 +1676,7 @@ ddb-copy-data source_table new_table limit="":
 # hint: tables: number of test tables (default: 4)
 # hint: table_size: rows per table (default: 100000)
 # hint: db: target database/schema (default: sbtest)
+[group('sysbench')]
 sysbench-prepare threads="4" tables="4" table_size="100000" db="sbtest":
   #!/usr/bin/env bash
   set -euo pipefail
@@ -309,6 +1705,7 @@ sysbench-prepare threads="4" tables="4" table_size="100000" db="sbtest":
 # hint: tables: number of test tables (default: 4)
 # hint: table_size: rows per table (default: 100000)
 # hint: db: target database/schema (default: sbtest)
+[group('sysbench')]
 sysbench-run threads="4" time="60" tables="4" table_size="100000" db="sbtest":
   #!/usr/bin/env bash
   set -euo pipefail
@@ -335,6 +1732,7 @@ sysbench-run threads="4" time="60" tables="4" table_size="100000" db="sbtest":
     run
 
 # hint: db: target database/schema (default: sbtest)
+[group('sysbench')]
 sysbench-cleanup db="sbtest":
   #!/usr/bin/env bash
   set -euo pipefail
@@ -360,8 +1758,31 @@ sysbench-cleanup db="sbtest":
 # aws-rds-list:
 #   python3 "$HOME/.config/mysql/rds_table.py" clusters
 
-aws-rds-list:
-  python3 "$HOME/.config/mysql/rds_table.py" instances
+# RDS 인스턴스 / Aurora 클러스터 목록.
+# 이전 버전은 rds_table.py 에 아무 입력도 주지 않아 stdin 을 기다리다 멈추거나
+# JSONDecodeError 로 죽었다. 이제 조회까지 recipe 안에서 한다.
+# hint: what: instances (default) | clusters
+[group('aws')]
+aws-rds-list what="instances":
+  #!/usr/bin/env bash
+  set -euo pipefail
+  color=1; { [ -t 1 ] && [ -z "${NO_COLOR:-}" ]; } || color=0
+
+  if [ "{{what}}" = "clusters" ]; then
+    {
+      # No endpoint column: its first label is just the cluster id again. Backup
+      # retention and the exported log types are what actually differ per cluster.
+      printf 'cluster\tstatus\tengine\tmembers\tbackup_days\tcw_logs\n'
+      aws rds describe-db-clusters --output text --query \
+        'sort_by(DBClusters, &DBClusterIdentifier)[*].[DBClusterIdentifier,Status,EngineVersion,length(DBClusterMembers),BackupRetentionPeriod,join(`,`, EnabledCloudwatchLogsExports || [`-`])]'
+    } | COLOR="$color" python3 "{{TABLE_PY}}"
+  else
+    {
+      printf 'cluster\tinstance\tclass\tstatus\tengine\taz\n'
+      aws rds describe-db-instances --output text --query \
+        'sort_by(DBInstances, &DBInstanceIdentifier)[*].[DBClusterIdentifier,DBInstanceIdentifier,DBInstanceClass,DBInstanceStatus,EngineVersion,AvailabilityZone]'
+    } | COLOR="$color" python3 "{{TABLE_PY}}"
+  fi
 
 # hint: pg: cluster parameter group name (e.g. webfulfillment-mdb-prod-80-cg)
 # hint: region: AWS region (default: ap-northeast-2)
@@ -370,6 +1791,8 @@ aws-rds-list:
 # aurora_enhanced_binlog / binlog_backup / binlog_replication_globaldb 는 static ->
 # 적용하려면 writer 인스턴스 재부팅 필요. AWS_PROFILE 을 미리 export 해두고 실행.
 
+[group('aws')]
+[confirm("Modify RDS parameter group " + pg + " in " + region + "?")]
 rds-zeroetl-params pg region="ap-northeast-2":
   #!/usr/bin/env bash
   set -euo pipefail
@@ -390,19 +1813,10 @@ rds-zeroetl-params pg region="ap-northeast-2":
 
 # Aurora/RDS user migration
 
-# hint: source_host: e.g. aurora-dev.otg.apac.npr.aws.asurion.net
-# hint: source_user: e.g. giho.seong
-# hint: raw_sql: output file for raw pt-show-grants result
-
-mysql-export-users source_host source_user raw_sql="users_raw.sql":
-  #!/usr/bin/env bash
-  set -euo pipefail
-  pt-show-grants --host="{{source_host}}" --user="{{source_user}}" --ask-pass > "{{raw_sql}}"
-  echo "Written: {{raw_sql}}"
-
 # hint: input_sql: raw SQL from pt-show-grants
 # hint: output_sql: sanitized output file for Aurora/RDS
 
+[group('mysql')]
 mysql-sanitize-users input_sql="users_raw.sql" output_sql="users_sanitized.sql":
   #!/usr/bin/env bash
   set -euo pipefail
@@ -411,6 +1825,7 @@ mysql-sanitize-users input_sql="users_raw.sql" output_sql="users_sanitized.sql":
 
 # hint: input_sql: sanitized SQL to validate before import
 
+[group('mysql')]
 mysql-check-users input_sql="users_sanitized.sql":
   #!/usr/bin/env bash
   set -euo pipefail
@@ -423,17 +1838,45 @@ mysql-check-users input_sql="users_sanitized.sql":
   echo "== risky privileges =="
   grep -nE 'SUPER|SYSTEM_VARIABLES_ADMIN|SESSION_VARIABLES_ADMIN|BINLOG_ADMIN|ROLE_ADMIN|SET_USER_ID|FILE|SHUTDOWN' "{{input_sql}}" || echo "  (none)"
 
-# hint: source_host: e.g. aurora-dev.otg.apac.npr.aws.asurion.net
-# hint: source_user: e.g. giho.seong
+# hint: source_host: e.g. <host from ~/.config/mysql/hosts>
+# hint: source_user: e.g. <db user>
 # hint: raw_sql: intermediate raw grants file
 # hint: sanitized_sql: final Aurora-compatible output file
+# note: pick users to dump via fzf (Tab = multi-select); Enter with none selected = all users
 
+[group('mysql')]
 mysql-dump-users source_host source_user raw_sql="users_raw.sql" sanitized_sql="users_sanitized.sql":
   #!/usr/bin/env bash
   set -euo pipefail
 
-  echo "[1/3] Dumping grants from {{source_host}}..."
-  pt-show-grants --host="{{source_host}}" --user="{{source_user}}" --ask-pass > "{{raw_sql}}"
+  pw=$(security find-generic-password -s "mysql-db-connect" -a "{{source_user}}" -w 2>/dev/null || true)
+  [ -z "$pw" ] && { echo "Keychain에 비밀번호 없음 (account={{source_user}})" >&2; exit 1; }
+
+  echo "[1/3] Selecting users from {{source_host}}..."
+  mapfile -t picked < <(MYSQL_PWD="$pw" mysql -h "{{source_host}}" -u "{{source_user}}" -Nse \
+    "SELECT CONCAT(user,'@',host) FROM mysql.user \
+     WHERE user NOT IN ('rdsadmin','mysql.session','mysql.sys','mysql.infoschema') \
+     ORDER BY user, host" \
+    | fzf --multi --prompt="dump users (Tab=multi, empty=all)> " --height=60% --scheme=default)
+
+  only_args=()
+  if [ "${#picked[@]}" -gt 0 ]; then
+    only=$(IFS=,; printf '%s' "${picked[*]}")
+    only_args=(--only "$only")
+    echo "  selected: ${#picked[@]} user(s)"
+  else
+    echo "  no selection -> dumping ALL users"
+  fi
+
+  echo "  Dumping grants..."
+  # --password=... would put the password in argv, where any user on the box can
+  # read it out of `ps`. pt-show-grants supports --defaults-file (-F), so use the
+  # same temp 0600 file that pt-osc below uses.
+  cnf=$(mktemp)
+  chmod 600 "$cnf"
+  trap 'rm -f "$cnf"' EXIT
+  printf '[client]\npassword=%s\n' "$pw" > "$cnf"
+  pt-show-grants --defaults-file="$cnf" --host="{{source_host}}" --user="{{source_user}}" ${only_args[@]+"${only_args[@]}"} > "{{raw_sql}}"
   echo "  Written: {{raw_sql}}"
 
   echo "[2/3] Sanitizing for Aurora/RDS..."
@@ -460,95 +1903,453 @@ mysql-dump-users source_host source_user raw_sql="users_raw.sql" sanitized_sql="
   if [ "$issues" -eq 0 ]; then
     echo "  OK — no issues found"
   fi
+
+  raw_abs=$(cd "$(dirname "{{raw_sql}}")" && printf '%s/%s' "$(pwd)" "$(basename "{{raw_sql}}")")
+  san_abs=$(cd "$(dirname "{{sanitized_sql}}")" && printf '%s/%s' "$(pwd)" "$(basename "{{sanitized_sql}}")")
+  raw_size=$(du -h "{{raw_sql}}" | cut -f1)
+  san_size=$(du -h "{{sanitized_sql}}" | cut -f1)
+  raw_users=$(grep -cE '^CREATE USER' "{{raw_sql}}" || true)
+  san_users=$(grep -cE '^CREATE USER' "{{sanitized_sql}}" || true)
+  san_roles=$(grep -cE '^CREATE ROLE' "{{sanitized_sql}}" || true)
+  san_defrole=$(grep -cE '^SET DEFAULT ROLE' "{{sanitized_sql}}" || true)
+  dropped=$(( raw_users - san_users ))
+
   echo ""
-  echo "Review {{sanitized_sql}}, then run: just mysql-import-users <target_host> <target_user> {{sanitized_sql}}"
+  echo "==================== DUMP SUMMARY ===================="
+  echo "  source     : {{source_user}}@{{source_host}}"
+  echo "  raw grants : $raw_abs  ($raw_size, $raw_users users)"
+  echo "  sanitized  : $san_abs  ($san_size)"
+  echo "     users    : $san_users kept  ($dropped system/reserved dropped)"
+  echo "     roles    : $san_roles kept"
+  echo "     rewrites : $san_defrole DEFAULT ROLE -> SET DEFAULT ROLE"
+  echo "     issues   : $issues"
+  echo "====================================================="
+  echo ""
+  echo "Next: review the sanitized file, then import:"
+  echo "  \$EDITOR \"$san_abs\""
+  echo "  just mysql-import-users <target_host> <target_user>   # then pick the .sql via fzf"
 
 # hint: target_host: e.g. aurora-skt-otg-uat-cluster.cluster-czdk59pd0a4y.ap-northeast-2.rds.amazonaws.com
-# hint: target_user: e.g. giho.seong
-# hint: input_sql: sanitized SQL to import
+# hint: target_user: e.g. <db user>
+# note: input SQL is picked via fzf (searches current dir for *.sql); none found -> type path
 
-mysql-import-users target_host target_user input_sql="users_sanitized.sql":
+[group('mysql')]
+[confirm("Import users into " + target_user + "@" + target_host + "?")]
+mysql-import-users target_host target_user:
   #!/usr/bin/env bash
   set -euo pipefail
-  mysql --host="{{target_host}}" --user="{{target_user}}" --password < "{{input_sql}}"
-  echo "Imported: {{input_sql}}"
 
-# hint: host: e.g. aurora-dev.otg.apac.npr.aws.asurion.net
-# hint: user: e.g. giho.seong
+  mapfile -t sqls < <(find . -maxdepth 1 -type f -name '*.sql' 2>/dev/null | sed 's:^\./::' | sort)
+  if [ "${#sqls[@]}" -gt 0 ]; then
+    input_sql=$(printf '%s\n' "${sqls[@]}" | \
+      fzf --prompt="import sql> " --height=40% --scheme=default)
+  else
+    read -rp "sql file (경로 직접 입력): " input_sql
+  fi
+  [ -z "$input_sql" ] && exit 0
+  [ -f "$input_sql" ] || { echo "파일 없음: $input_sql" >&2; exit 1; }
 
+  # Keychain first, passed via MYSQL_PWD so it never lands in argv; prompt only
+  # when there is no entry for this account. The dump recipes already do this --
+  # this one used to prompt every time.
+  pw=$(security find-generic-password -s "mysql-db-connect" -a "{{target_user}}" -w 2>/dev/null || true)
+  run_mysql() {
+    if [ -n "$pw" ]; then MYSQL_PWD="$pw" mysql "$@"; else mysql --password "$@"; fi
+  }
+
+  if run_mysql --host="{{target_host}}" --user="{{target_user}}" < "$input_sql"; then
+    echo "Imported: $input_sql -> {{target_user}}@{{target_host}}"
+  else
+    rc=$?
+    echo "Import FAILED (exit $rc): $input_sql" >&2
+    exit "$rc"
+  fi
+
+# hint: host: e.g. <host from ~/.config/mysql/hosts>
+# hint: user: e.g. <db user>
+
+[group('mysql')]
 mysql-binlog-status host user:
   #!/usr/bin/env bash
   set -euo pipefail
+  # This used to pass --password twice, so it prompted twice for the same
+  # credential. The two calls are kept -- they are what keeps the two sections
+  # separately labelled -- but the password now comes from the Keychain.
+  pw=$(security find-generic-password -s "mysql-db-connect" -a "{{user}}" -w 2>/dev/null || true)
+  run_mysql() {
+    if [ -n "$pw" ]; then MYSQL_PWD="$pw" mysql "$@"; else mysql --password "$@"; fi
+  }
   echo "== Current binlog position =="
-  mysql --host="{{host}}" --user="{{user}}" --password \
-    -e "SHOW MASTER STATUS\G"
+  # -E instead of a trailing \G: this client (26.7.0) rejects \G inside -e with
+  # "Unknown command '\G'", so the recipe failed on its first line. -E gives the
+  # same vertical layout. Pre-existing bug, unrelated to the Keychain change.
+  run_mysql --host="{{host}}" --user="{{user}}" -E -e "SHOW MASTER STATUS"
   echo ""
   echo "== Available binary logs =="
-  mysql --host="{{host}}" --user="{{user}}" --password \
-    -e "SHOW BINARY LOGS"
+  run_mysql --host="{{host}}" --user="{{user}}" -e "SHOW BINARY LOGS"
 
-# hint: host: e.g. aurora-dev.otg.apac.npr.aws.asurion.net
-# hint: user: e.g. giho.seong
+# hint: host: e.g. <host from ~/.config/mysql/hosts>
+# hint: user: e.g. <db user>
 # hint: binlog: binlog filename (from mysql-binlog-status)
 # hint: start_datetime: e.g. "2026-03-17 09:00:00"
 # hint: stop_datetime: e.g. "2026-03-17 10:00:00"
 # hint: output: output SQL file (default: binlog_recover_<timestamp>.sql)
 
+[group('mysql')]
 mysql-binlog-extract host user binlog start_datetime stop_datetime output="":
   #!/usr/bin/env bash
   set -euo pipefail
   timestamp=$(date +%Y%m%d_%H%M%S)
   out="{{output}}"
   [ -z "$out" ] && out="binlog_recover_${timestamp}.sql"
+  # Keychain via a temp 0600 --defaults-file (mysqlbinlog supports -F) instead of
+  # prompting. --defaults-file must come before the other options.
+  pw=$(security find-generic-password -s "mysql-db-connect" -a "{{user}}" -w 2>/dev/null || true)
+  auth=(--password)
+  if [ -n "$pw" ]; then
+    cnf=$(mktemp)
+    chmod 600 "$cnf"
+    trap 'rm -f "$cnf"' EXIT
+    printf '[client]\npassword=%s\n' "$pw" > "$cnf"
+    auth=(--defaults-file="$cnf")
+  fi
   mysqlbinlog \
+    "${auth[@]}" \
     --read-from-remote-server \
     --host="{{host}}" \
     --user="{{user}}" \
-    --password \
     --start-datetime="{{start_datetime}}" \
     --stop-datetime="{{stop_datetime}}" \
     "{{binlog}}" > "$out"
   echo "Written: $out"
   echo "Review $out, then run: mysql --host=<target> --user=<user> --password < $out"
 
-# hint: host: e.g. aurora-dev.otg.apac.npr.aws.asurion.net
-# hint: user: e.g. giho.seong
+# hint: host: e.g. <host from ~/.config/mysql/hosts>
+# hint: user: e.g. <db user>
 # hint: binlog: binlog filename (from mysql-binlog-status)
 # hint: start_position: start position (from SHOW MASTER STATUS)
 # hint: stop_position: stop position
 # hint: output: output SQL file (default: binlog_recover_<timestamp>.sql)
 
+[group('mysql')]
 mysql-binlog-extract-pos host user binlog start_position stop_position output="":
   #!/usr/bin/env bash
   set -euo pipefail
   timestamp=$(date +%Y%m%d_%H%M%S)
   out="{{output}}"
   [ -z "$out" ] && out="binlog_recover_${timestamp}.sql"
+  # Keychain via a temp 0600 --defaults-file (mysqlbinlog supports -F) instead of
+  # prompting. --defaults-file must come before the other options.
+  pw=$(security find-generic-password -s "mysql-db-connect" -a "{{user}}" -w 2>/dev/null || true)
+  auth=(--password)
+  if [ -n "$pw" ]; then
+    cnf=$(mktemp)
+    chmod 600 "$cnf"
+    trap 'rm -f "$cnf"' EXIT
+    printf '[client]\npassword=%s\n' "$pw" > "$cnf"
+    auth=(--defaults-file="$cnf")
+  fi
   mysqlbinlog \
+    "${auth[@]}" \
     --read-from-remote-server \
     --host="{{host}}" \
     --user="{{user}}" \
-    --password \
     --start-position="{{start_position}}" \
     --stop-position="{{stop_position}}" \
     "{{binlog}}" > "$out"
   echo "Written: $out"
   echo "Review $out, then run: mysql --host=<target> --user=<user> --password < $out"
 
+# Online schema change (pt-online-schema-change)
+
+# hint: alter: ALTER clause without "ALTER TABLE <t>", e.g. "ADD COLUMN memo VARCHAR(64) NULL"
+# hint: execute: false (default) = --dry-run only; true = real run
+# hint: chunk_size: rows per chunk (default: 1000)
+# hint: chunk_index: index used to chunk the copy (default: PRIMARY)
+# hint: max_load: pause copying above this load (default: Threads_running=100)
+# hint: sleep: seconds to sleep after each chunk (default: 0). Use 0.01-0.05 on a server that
+#       serves many light queries, where --max-load never trips but the copy still adds latency.
+# hint: history: true to write progress to percona.pt_osc_history. Off by default (upstream default
+#       too) because pt-osc treats a failed history INSERT as fatal, not best-effort -- measured:
+#       with portal_admin it aborts the whole run at "INSERT command denied ... for table
+#       pt_osc_history". Needs INSERT on percona.* on the account you run as. Required for resume.
+# hint: resume: job_id from a previous failed run (see the history table) to continue from its last chunk
+# hint: no_check_alter: true to pass --no-check-alter; needed when the ALTER drops/adds the PRIMARY KEY
+# hint: extra: extra pt-osc flags appended verbatim
+# note: host, schema and table are picked via fzf. The password comes from Keychain and is
+#       written to a temp 0600 defaults-file, so it never lands in argv (visible via ps)
+#       or in shell history -- unlike passing --password= on the command line.
+# note: --no-drop-old-table/--no-drop-new-table/--no-drop-triggers are added on execute=true ONLY, so
+#       _old is kept for manual cleanup and --resume stays possible. pt-osc's own docs: "Drop triggers
+#       on the old table" -- so the retained triggers sit on _<tbl>_old, never on the live table.
+#       A dry run gets pt-osc's defaults and cleans up after itself.
+# note: with history=true, progress lands in percona.pt_osc_history and that is what an external
+#       watcher can poll: lower_boundary shows how far the copy got and ts stops advancing if the
+#       process died. It is also the only way --resume works.
+# note: this recipe previously passed --prompt-before-copy on execute=true. That option is NOT in
+#       upstream Percona Toolkit (it came from a 2014 Kakao patch), so pt-osc rejected it at option
+#       parsing and the execute path could never run. To change a PRIMARY KEY and PARTITION in one
+#       pass -- the case that option existed for, since MySQL cannot do both in one ALTER -- use a
+#       --plugin whose after_alter_new_table hook runs the partitioning DDL on the shadow table.
+#       That hook fires with --alter already applied and before triggers or any row copy, and unlike
+#       the prompt it needs no human at a terminal.
+
+[group('mysql')]
+pt-osc alter execute="false" chunk_size="1000" chunk_index="PRIMARY" max_load="Threads_running=100" sleep="0" history="false" resume="" no_check_alter="false" extra="":
+  #!/usr/bin/env bash
+  set -euo pipefail
+  HOSTS_FILE="{{HOSTS_FILE}}"
+  selected=$(grep -v '^#' "$HOSTS_FILE" | grep -v '^$' | \
+    fzf --prompt="pt-osc host> " --height=40% --scheme=default)
+  [ -z "$selected" ] && exit 0
+  host=$(echo "$selected" | cut -d: -f2)
+  port=$(echo "$selected" | cut -d: -f3)
+  user=$(echo "$selected" | cut -d: -f4)
+  pw=$(security find-generic-password -s "mysql-db-connect" -a "$user" -w 2>/dev/null || true)
+  [ -z "$pw" ] && { echo "Keychain에 비밀번호 없음 (account=$user)" >&2; exit 1; }
+
+  database=$(MYSQL_PWD="$pw" mysql -h "$host" -P "$port" -u "$user" -Nse \
+    "SELECT schema_name FROM information_schema.schemata \
+     WHERE schema_name NOT IN ('mysql','sys','information_schema','performance_schema') \
+     ORDER BY schema_name" | \
+    fzf --prompt="pt-osc schema> " --height=40% --scheme=default)
+  [ -z "$database" ] && exit 0
+
+  table=$(MYSQL_PWD="$pw" mysql -h "$host" -P "$port" -u "$user" -D "$database" -Nse \
+    "SELECT table_name FROM information_schema.tables \
+     WHERE table_schema=DATABASE() AND table_type='BASE TABLE' \
+     ORDER BY table_name" \
+    | fzf --prompt="pt-osc table> " --height=60% --scheme=default)
+  [ -z "$table" ] && exit 0
+
+  cnf=$(mktemp)
+  chmod 600 "$cnf"
+  trap 'rm -f "$cnf"' EXIT
+  printf '[client]\npassword=%s\n' "$pw" > "$cnf"
+
+  args=(
+    --defaults-file="$cnf"
+    --host="$host" --port="$port" --user="$user"
+    --alter="{{alter}}"
+    --chunk-size={{chunk_size}}
+    --chunk-index={{chunk_index}}
+    --max-load="{{max_load}}"
+    --set-vars="innodb_lock_wait_timeout=1,lock_wait_timeout=1"
+    --progress=time,30
+  )
+  [ "{{sleep}}" != "0" ] && args+=(--sleep={{sleep}})
+  # --resume can only continue a run that recorded itself, so it implies history.
+  { [ "{{history}}" = "true" ] || [ -n "{{resume}}" ]; } && args+=(--history)
+  [ -n "{{resume}}" ] && args+=(--resume={{resume}})
+  [ "{{no_check_alter}}" = "true" ] && args+=(--no-check-alter)
+  if [ "{{execute}}" = "true" ]; then
+    # Keep the artifacts of a REAL run for manual inspection/cleanup, and because --resume needs
+    # all three. A dry run has nothing worth keeping -- it never touched the original table -- and
+    # measured: with these flags a dry run leaves _<tbl>_new behind, so the next dry run of the
+    # same table collides with it.
+    args+=(--no-drop-old-table --no-drop-new-table --no-drop-triggers --execute)
+  else
+    args+=(--dry-run)
+  fi
+  [ -n "{{extra}}" ] && args+=({{extra}})
+
+  echo "target : ${database}.${table} on ${host}:${port}"
+  echo "alter  : {{alter}}"
+  [ -n "{{resume}}" ] && echo "resume : job_id {{resume}}"
+  [ "{{sleep}}" != "0" ] && echo "sleep  : {{sleep}}s per chunk"
+  if [ "{{execute}}" = "true" ]; then
+    if [ "{{history}}" = "true" ] || [ -n "{{resume}}" ]; then
+      echo "mode   : EXECUTE (progress in percona.pt_osc_history; note the job_id to --resume)"
+    else
+      echo "mode   : EXECUTE (no history -- pass history=true to make --resume possible)"
+    fi
+  else
+    echo "mode   : DRY RUN - pass execute=true to apply"
+  fi
+  pt-online-schema-change "${args[@]}" D="$database",t="$table"
+
+# PostgreSQL (pg_dump / pg_restore)
+#
+# 요구사항: libpq client tools (brew install libpq  또는  postgresql@16).
+# 비밀번호는 mysqlsh 처럼 미지정 시 pg_dump/pg_restore 가 자동 프롬프트합니다
+# (또는 PGPASSWORD / ~/.pgpass 사용). PG 덤프는 인스턴스 전체가 아니라 DB 단위입니다.
+
+# hint: host: e.g. <pg host from ~/.config/mysql/hosts>
+# hint: user: e.g. <db user>
+# hint: database: target database (PG는 DB 단위 덤프)
+# hint: port: server port (default: 5432)
+# hint: threads: parallel jobs (default: 4)
+# hint: outdir: output directory (default: pgdump_<database>_<timestamp>)
+
+[group('postgres')]
+pg-dump-data host user database port="5432" threads="4" outdir="":
+  #!/usr/bin/env bash
+  set -euo pipefail
+  timestamp=$(date +%Y%m%d_%H%M%S)
+  out="{{outdir}}"
+  [ -z "$out" ] && out="pgdump_{{database}}_${timestamp}"
+  pg_dump --host="{{host}}" --port="{{port}}" --username="{{user}}" --dbname="{{database}}" \
+    --format=directory --jobs={{threads}} --no-sync --file="$out"
+  echo "Written: $out/"
+
+# hint: host: e.g. <pg host from ~/.config/mysql/hosts>
+# hint: user: e.g. <db user>
+# hint: database: target database
+# hint: tables: comma-separated table names (schema-qualified OK, e.g. public.t1,app.t2)
+# hint: port: server port (default: 5432)
+# hint: threads: parallel jobs (default: 4)
+# hint: outdir: output directory (default: pgdump_<database>_tables_<timestamp>)
+
+[group('postgres')]
+pg-dump-tables host user database tables port="5432" threads="4" outdir="":
+  #!/usr/bin/env bash
+  set -euo pipefail
+  timestamp=$(date +%Y%m%d_%H%M%S)
+  out="{{outdir}}"
+  [ -z "$out" ] && out="pgdump_{{database}}_tables_${timestamp}"
+  IFS=',' read -r -a raw_tbl_array <<< "{{tables}}"
+  [ "${#raw_tbl_array[@]}" -gt 0 ] || { echo "No tables provided" >&2; exit 1; }
+  tbl_args=()
+  for table in "${raw_tbl_array[@]}"; do
+    table=$(printf '%s' "$table" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')
+    [ -z "$table" ] && { echo "Empty table name in tables list" >&2; exit 1; }
+    tbl_args+=( --table="$table" )
+  done
+  pg_dump --host="{{host}}" --port="{{port}}" --username="{{user}}" --dbname="{{database}}" \
+    --format=directory --jobs={{threads}} --no-sync --file="$out" "${tbl_args[@]}"
+  echo "Written: $out/"
+
+# hint: host: e.g. <pg host from ~/.config/mysql/hosts>
+# hint: user: e.g. <db user>
+# hint: database: target database
+# hint: port: server port (default: 5432)
+# hint: threads: parallel jobs (default: 4)
+# hint: outdir: output directory (default: pgdump_<database>_nodata_<timestamp>)
+
+[group('postgres')]
+pg-dump-no-data host user database port="5432" threads="4" outdir="":
+  #!/usr/bin/env bash
+  set -euo pipefail
+  timestamp=$(date +%Y%m%d_%H%M%S)
+  out="{{outdir}}"
+  [ -z "$out" ] && out="pgdump_{{database}}_nodata_${timestamp}"
+  # No --jobs here: pg_dump parallelises data dumping, and --schema-only has no
+  # data to split, so the flag would do nothing.
+  pg_dump --host="{{host}}" --port="{{port}}" --username="{{user}}" --dbname="{{database}}" \
+    --format=directory --schema-only --no-sync --file="$out"
+  echo "Written: $out/"
+
+# hint: host: e.g. <pg host from ~/.config/mysql/hosts>
+# hint: user: e.g. <db user>
+# hint: database: target database to restore INTO (must already exist)
+# hint: indir: dump directory from pg-dump-data / pg-dump-tables
+# hint: port: server port (default: 5432)
+# hint: threads: parallel jobs (default: 4)
+# hint: on_exist: existing objects -> error (default, stop on error) | drop (--clean --if-exists) | ignore (continue past errors)
+# hint: no_owner: strip ownership/privileges -> true (default, RDS-safe) | false (preserve owners)
+
+[group('postgres')]
+[confirm("Load dump into " + database + " on " + host + "?")]
+pg-load host user database indir port="5432" threads="4" on_exist="error" no_owner="true":
+  #!/usr/bin/env bash
+  set -euo pipefail
+
+  restore_args=(
+    --host="{{host}}" --port="{{port}}" --username="{{user}}" --dbname="{{database}}"
+    --format=directory --jobs={{threads}}
+  )
+
+  case "{{on_exist}}" in
+    drop)     restore_args+=(--clean --if-exists) ;;
+    ignore)   ;;
+    error|"") restore_args+=(--exit-on-error) ;;
+    *) echo "on_exist must be one of: error | drop | ignore" >&2; exit 1 ;;
+  esac
+
+  case "{{no_owner}}" in
+    true|"")  restore_args+=(--no-owner --no-privileges) ;;
+    false)    ;;
+    *) echo "no_owner must be true or false" >&2; exit 1 ;;
+  esac
+
+  pg_restore "${restore_args[@]}" "{{indir}}"
+  echo "Loaded: {{indir}} into {{database}}"
+
+# hint: host/user/database/indir/port/threads/on_exist/no_owner: pg-load 와 동일
+# hint: maint_mem: 인덱스 빌드용 maintenance_work_mem (default: 1GB)
+#
+# pg-load + 세션 튜닝(PGOPTIONS) + 로드 후 ANALYZE. 대용량 복구용 opt-in.
+# 주의: 병렬(-j threads) 인덱스 빌드 구간에 워커당 maint_mem 만큼 메모리 사용
+#       (예: threads=4, maint_mem=1GB -> 피크 ~4GB). 타겟 RAM 보고 조절.
+# synchronous_commit=off 라 복구 중 크래시 시 재실행 필요(데이터 유실 걱정 X, 재적재).
+
+[group('postgres')]
+pg-load-fast host user database indir port="5432" threads="4" on_exist="error" no_owner="true" maint_mem="1GB":
+  #!/usr/bin/env bash
+  set -euo pipefail
+  export PGOPTIONS="-c maintenance_work_mem={{maint_mem}} -c synchronous_commit=off -c statement_timeout=0"
+  echo ">> PGOPTIONS=$PGOPTIONS"
+  just --justfile "{{justfile()}}" pg-load \
+    "{{host}}" "{{user}}" "{{database}}" "{{indir}}" "{{port}}" "{{threads}}" "{{on_exist}}" "{{no_owner}}"
+  echo ">> ANALYZE {{database}} ..."
+  psql --host="{{host}}" --port="{{port}}" --username="{{user}}" --dbname="{{database}}" -c "ANALYZE;"
+  echo "Fast-loaded + analyzed: {{indir}} into {{database}}"
+
+# hint: host: e.g. <pg host from ~/.config/mysql/hosts>
+# hint: user: e.g. <db user>
+# hint: port: server port (default: 5432)
+# hint: raw_sql: output file (default: pg_roles_<timestamp>.sql)
+#
+# 클러스터 전역 role/권한 덤프. --no-role-passwords 로 RDS(pg_authid 읽기 차단)에서도 동작.
+# 비밀번호는 덤프되지 않으므로 타겟에서 별도 설정 필요.
+
+[group('postgres')]
+pg-dump-roles host user port="5432" raw_sql="":
+  #!/usr/bin/env bash
+  set -euo pipefail
+  timestamp=$(date +%Y%m%d_%H%M%S)
+  out="{{raw_sql}}"
+  [ -z "$out" ] && out="pg_roles_${timestamp}.sql"
+  pg_dumpall --host="{{host}}" --port="{{port}}" --username="{{user}}" \
+    --roles-only --no-role-passwords > "$out"
+  echo "Written: $out"
+  echo ""
+  echo "== RDS-reserved / built-in roles (RDS import 전 제거 권장) =="
+  grep -nE 'rds_superuser|rds_replication|rds_iam|rds_password|rds_ad|rdsadmin|rdstopmgr|CREATE ROLE (pg_|rds)' "$out" || echo "  (none)"
+  echo ""
+  echo "Review $out, then run: just pg-import-roles <target_host> <target_user> $out"
+
+# hint: host: e.g. <pg host from ~/.config/mysql/hosts>
+# hint: user: e.g. <db user>
+# hint: input_sql: roles SQL from pg-dump-roles
+# hint: port: server port (default: 5432)
+# hint: database: maintenance DB to connect to (default: postgres)
+
+[group('postgres')]
+[confirm("Apply roles from " + input_sql + " to " + host + "?")]
+pg-import-roles host user input_sql port="5432" database="postgres":
+  #!/usr/bin/env bash
+  set -euo pipefail
+  psql --host="{{host}}" --port="{{port}}" --username="{{user}}" --dbname="{{database}}" \
+    -v ON_ERROR_STOP=0 -f "{{input_sql}}"
+  echo "Imported: {{input_sql}}"
+
 # AWS DMS
 
 DMS_CLI := "cd " + DMSCTL_ROOT + "/cli && uv run dms"
 
 # DMS 전체 상태 (diff 기반: AWS vs 코드)
+[group('dms')]
 dms-status:
   {{DMS_CLI}} status
 
 # hint: task: e.g. prod-finance / prod-dax-master (빈값이면 전체)
 # hint: source: dax / horizon / otg / soho (옵션)
+[group('dms')]
 dms-diff task="" source="":
   #!/usr/bin/env bash
   set -euo pipefail
-  cd "$DMSCTL_ROOT/cli"
+  cd "{{DMSCTL_ROOT}}/cli"
   if [ -n "{{task}}" ] && [ -n "{{source}}" ]; then
     uv run dms diff "{{task}}" --source "{{source}}"
   elif [ -n "{{task}}" ]; then
@@ -560,10 +2361,11 @@ dms-diff task="" source="":
   fi
 
 # hint: task: e.g. prod-finance / all
+[group('dms')]
 dms-sync task dry_run="true":
   #!/usr/bin/env bash
   set -euo pipefail
-  cd "$DMSCTL_ROOT/cli"
+  cd "{{DMSCTL_ROOT}}/cli"
   if [ "{{dry_run}}" = "true" ]; then
     uv run dms sync {{task}} --dry-run
   else
@@ -571,10 +2373,12 @@ dms-sync task dry_run="true":
   fi
 
 # hint: target: e.g. prod-finance / horizon / all
+[group('dms')]
+[confirm("Deploy DMS task " + target + " for real (plan=" + plan + ")?")]
 dms-deploy target plan="false":
   #!/usr/bin/env bash
   set -euo pipefail
-  cd "$DMSCTL_ROOT/cli"
+  cd "{{DMSCTL_ROOT}}/cli"
   if [ "{{plan}}" = "true" ]; then
     uv run dms deploy {{target}} --plan
   else
@@ -585,10 +2389,11 @@ dms-deploy target plan="false":
 # hint: source: dax / horizon / otg / soho
 # hint: tables: e.g. TABLE1,TABLE2 (또는 --from-aws 사용시 빈값)
 # hint: from_aws: 기존 AWS task ID에서 import (빈값이면 tables 사용)
+[group('dms')]
 dms-generate task source tables="" from_aws="":
   #!/usr/bin/env bash
   set -euo pipefail
-  cd "$DMSCTL_ROOT/cli"
+  cd "{{DMSCTL_ROOT}}/cli"
   if [ -n "{{from_aws}}" ]; then
     uv run dms generate "{{task}}" --source "{{source}}" --from-aws "{{from_aws}}"
   else
@@ -597,32 +2402,38 @@ dms-generate task source tables="" from_aws="":
 
 # hint: task: e.g. prod-finance
 # hint: table: e.g. NEW_TABLE
+[group('dms')]
 dms-table-add task table:
   {{DMS_CLI}} tables add "{{task}}" "{{table}}"
 
 # hint: task: e.g. prod-finance
 # hint: table: e.g. OLD_TABLE
+[group('dms')]
 dms-table-remove task table:
   {{DMS_CLI}} tables remove "{{task}}" "{{table}}"
 
 # hint: task: e.g. prod-finance
+[group('dms')]
 dms-table-list task:
   {{DMS_CLI}} tables list "{{task}}"
 
 # hint: task: e.g. prod-finance / all
+[group('dms')]
 dms-stop task:
   {{DMS_CLI}} task stop {{task}}
 
 # hint: task: e.g. prod-finance / all
+[group('dms')]
 dms-resume task:
   {{DMS_CLI}} task resume {{task}}
 
 # hint: task: e.g. prod-finance (빈값이면 전체)
 # hint: source: dax / horizon / otg / soho (옵션)
+[group('dms')]
 dms-task-status task="" source="":
   #!/usr/bin/env bash
   set -euo pipefail
-  cd "$DMSCTL_ROOT/cli"
+  cd "{{DMSCTL_ROOT}}/cli"
   if [ -n "{{task}}" ] && [ -n "{{source}}" ]; then
     uv run dms task status "{{task}}" --source "{{source}}"
   elif [ -n "{{task}}" ]; then
@@ -634,28 +2445,32 @@ dms-task-status task="" source="":
   fi
 
 # hint: task: e.g. prod-finance
+[group('dms')]
 dms-table-status task:
   {{DMS_CLI}} task table-status {{task}}
 
 # hint: source: dax / horizon / otg / soho (옵션, 빈값이면 전체)
+[group('dms')]
 dms-stats source="":
   #!/usr/bin/env bash
   set -euo pipefail
-  cd "$DMSCTL_ROOT/cli"
+  cd "{{DMSCTL_ROOT}}/cli"
   if [ -n "{{source}}" ]; then
     uv run dms task stats --source "{{source}}"
   else
     uv run dms task stats
   fi
 
+[group('dms')]
 dms-validate:
   {{DMS_CLI}} validate
 
 # hint: source: dax / horizon / otg / soho (옵션, 빈값이면 전체)
+[group('dms')]
 dms-clean source="":
   #!/usr/bin/env bash
   set -euo pipefail
-  cd "$DMSCTL_ROOT/cli"
+  cd "{{DMSCTL_ROOT}}/cli"
   if [ -n "{{source}}" ]; then
     uv run dms clean --source "{{source}}"
   else
@@ -665,6 +2480,7 @@ dms-clean source="":
 # Docker
 
 # fzf로 실행 중인 컨테이너 선택 후 bash/sh 접속
+[group('docker')]
 docker-exec:
   #!/usr/bin/env bash
   set -euo pipefail
@@ -676,6 +2492,7 @@ docker-exec:
 
 # fzf로 컨테이너 선택 후 로그 tail
 # hint: lines: 출력할 로그 줄 수 (default: 100)
+[group('docker')]
 docker-logs lines="100":
   #!/usr/bin/env bash
   set -euo pipefail
@@ -685,10 +2502,12 @@ docker-logs lines="100":
   docker logs --tail={{lines}} -f "$selected"
 
 # 실행 중인 컨테이너 실시간 리소스 모니터링
+[group('docker')]
 docker-stats:
   docker stats $(docker ps --format "{{{{.Names}}}}" | tr '\n' ' ')
 
 # 안 쓰는 컨테이너/이미지/볼륨/네트워크 일괄 정리
+[group('docker')]
 docker-clean:
   #!/usr/bin/env bash
   set -euo pipefail
@@ -703,6 +2522,7 @@ docker-clean:
   echo "done"
 
 # fzf로 컨테이너 선택 후 중지
+[group('docker')]
 docker-stop:
   #!/usr/bin/env bash
   set -euo pipefail
@@ -713,6 +2533,7 @@ docker-stop:
   echo "stopped"
 
 # fzf로 이미지 선택 후 삭제
+[group('docker')]
 docker-rmi:
   #!/usr/bin/env bash
   set -euo pipefail
