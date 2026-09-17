@@ -11,7 +11,7 @@ smart_completion = True
 # Minimum characters typed before offering completion suggestions. A forward
 # slash for a command always offers completions regardless. 1 pops the menu on
 # every keystroke; 3 is the value mycli's own config suggests.
-min_completion_trigger = 3
+min_completion_trigger = 1
 
 # Marker appended to indexed column names in the completion menu, so an index
 # is visible while writing the query. Not inserted into the query itself.
