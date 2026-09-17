@@ -89,7 +89,37 @@ export DMSCTL_ROOT="$HOME/20_Work/01_Asurion/scripts/aws/dms"
 export DDB_SCRIPT_DIR="$HOME/10_Database/AWS/dynamodb"
 alias vj="vi $JUSTFILE"
 unalias j 2>/dev/null
+# Execution seam for j(). Kept as its own function so tests/test_j_wrapper.zsh
+# can override it and inspect the composed command; overriding `print -z` used
+# to serve that purpose, but j now runs the recipe directly.
+__j_exec() {
+  eval "bash -lc $1"
+}
+
+# Ask before running a recipe marked [confirm] in the justfile. Separate from
+# __j_exec so tests can answer it without a terminal. Returns non-zero on "no".
+__j_confirm() {
+  local reply
+  print -n -u2 -- "$1 [y/N] "
+  read -r reply || reply=''
+  print -u2 -- ''
+  [[ "$reply" == (y|Y|yes|YES) ]]
+}
+
 j() {
+  # `alias j=just` is just's documented convention, so keep that meaning when
+  # arguments are given and only open the picker when called bare. The flags are
+  # the ones from the README's "Forwarding Alias" tip; $JUSTFILE is our own
+  # variable and just does not read it (its env var is JUST_JUSTFILE), so
+  # without --justfile this fails with "no justfile found" outside a project.
+  # --working-directory . matches what the picker path does for a non-module
+  # recipe. This path also honours [confirm], since just runs the recipe itself
+  # rather than j extracting the body and re-running it under bash.
+  if (( $# )); then
+    just --justfile "$JUSTFILE" --working-directory . "$@"
+    return
+  fi
+
   local selected recipe sig rest param name default prompt_str val cmd dry line fzf_selected
   local -a params args db_hosts db_labels db_users host_options just_lines
   local -A hints
@@ -117,11 +147,16 @@ j() {
     list_out="${list_out}"$'\n'"$(just --justfile "$JUSTFILE" --list "$mname" --list-heading='' --list-prefix='' 2>/dev/null | sed "s/^[[:space:]]*/${mname} /")"
   done
 
-  selected=$(printf '%s\n' "$list_out" | sed '/^[[:space:]]*$/d' | fzf --prompt="just> " --height=40%)
+  # Drop blank lines and the `[group]` headers that --list started emitting once
+  # recipes carry [group(...)] attributes. Neither is a selectable recipe, and a
+  # header would parse as a recipe named `[mysqlsh]`.
+  selected=$(printf '%s\n' "$list_out" \
+    | sed -e '/^[[:space:]]*$/d' -e '/^[[:space:]]*\[[^]]*\][[:space:]]*$/d' \
+    | fzf --prompt="just> " --height=40%)
   [ -z "$selected" ] && return
 
   # ── Detect module vs top-level recipe ──
-  local first_tok src_file invoke_prefix is_mod=0
+  local first_tok src_file invoke_prefix is_mod=0 needs_confirm=0
   first_tok=$(echo "$selected" | sed 's/^[[:space:]]*//' | awk '{print $1}')
   src_file="$JUSTFILE"
   invoke_prefix=""
@@ -152,6 +187,16 @@ j() {
         fi
         [[ -z "${line//[[:space:]]/}" ]] && continue
         [[ "$line" == '#'* ]] && continue
+        # Attributes such as [group('mysqlsh')] and [confirm(...)] sit between
+        # the doc/hint comments and the recipe line, so keep scanning past them
+        # or every hint above an attribute is lost.
+        if [[ "$line" =~ '^\[.*\][[:space:]]*$' ]]; then
+          # j runs the extracted body under bash rather than through just, so
+          # just's own confirmation never fires on this path -- note it and ask
+          # below instead.
+          [[ "$line" == '[confirm'* ]] && needs_confirm=1
+          continue
+        fi
         break
       done
       break
@@ -261,14 +306,21 @@ j() {
     _wd="$PWD"
   fi
 
-  dry=$(just --dry-run --justfile "$_jf" --working-directory "$_wd" "$recipe" "${args[@]}" 2>&1) || {
+  # --yes is required: --dry-run also honours [confirm], and its prompt would be
+  # captured by this substitution instead of shown, leaving the shell silently
+  # waiting for input. The confirmation is asked below instead.
+  dry=$(just --dry-run --yes --justfile "$_jf" --working-directory "$_wd" "$recipe" "${args[@]}" 2>&1) || {
     print -u2 -- "$dry"
     return 1
   }
 
   cmd=$(printf '%s' "$dry" | python3 -c 'import re, sys
 text = sys.stdin.read()
-lines = [line for line in text.splitlines() if line and not line.startswith("#!") and not line.startswith("set ") and not line.startswith("echo")]
+# Only the shebang is dropped; it is meaningless inside `bash -lc`.
+# "set " and "echo" used to be stripped too, which silently ran every recipe
+# without its `set -euo pipefail` (failures did not abort) and hid its progress
+# messages.
+lines = [line for line in text.splitlines() if line and not line.startswith("#!")]
 text = "\n".join(lines)
 text = re.sub(r"\\\n\s*", " ", text).rstrip()
 print(text, end="")')
@@ -276,7 +328,43 @@ print(text, end="")')
   local quoted_cmd
   quoted_cmd=$(printf '%s' "${_cdpfx}${cmd}" | python3 -c 'import shlex, sys; print(shlex.quote(sys.stdin.read()))')
 
-  print -z "bash -lc $quoted_cmd"
+  # Leave one re-runnable line in history rather than the multi-line body that
+  # `print -z` used to push there. Running this line again re-invokes the same
+  # recipe with the same arguments.
+  local replay _a
+  # Abbreviate $HOME to ~ so the line reads like the ones typed by hand, and
+  # only leave it unquoted (so ~ still expands on replay) when the rest of the
+  # path needs no quoting.
+  local _rjf="${_jf/#$HOME/~}" _rwd="${_wd/#$HOME/~}"
+  [[ $_rjf == *[^A-Za-z0-9_./~-]* ]] && _rjf=${(q-)_jf}
+  [[ $_rwd == *[^A-Za-z0-9_./~-]* ]] && _rwd=${(q-)_wd}
+  # (q-) is minimal quoting: plain words stay bare and only arguments that need
+  # it get wrapped in single quotes, so the line looks hand-typed. Plain (q)
+  # backslash-escapes every space, which triples the length of a long --alter.
+  replay="just --justfile $_rjf --working-directory $_rwd ${(q-)recipe}"
+  for _a in "${args[@]}"; do
+    replay+=" ${(q-)_a}"
+  done
+
+  print -u2 -- "→ ${invoke_prefix:+$invoke_prefix }$recipe ${args[*]}"
+
+  # Confirm before recording history, so an aborted run leaves no trace of a
+  # command that never happened.
+  if (( needs_confirm )) && ! __j_confirm "Run $recipe?"; then
+    print -u2 -- 'Aborted.'
+    return 1
+  fi
+
+  print -s -- "$replay"
+  # print -s only reaches zsh's own history; atuin hooks preexec, so it needs
+  # to be told directly or the entry never shows up in ctrl-r.
+  if command -v atuin >/dev/null 2>&1; then
+    atuin history start -- "$replay" >/dev/null 2>&1 || true
+  fi
+
+  # Run it here instead of pushing it to the prompt buffer: that always needed a
+  # second Enter, and the body is what polluted history.
+  __j_exec "$quoted_cmd"
 }
 fi
 
