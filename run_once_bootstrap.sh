@@ -13,22 +13,30 @@ fi
 # justfile 의 PGQ_PYTHON 이 pgcli 툴 venv 의 인터프리터를 직접 가리키므로
 # (psql 이 없어 psycopg 를 쓴다) redshift-* 레시피가 이 설치에 의존한다.
 #
-# 두 브랜치는 아직 원격에 push 되지 않아 clone 할 수 없다. 체크아웃이 있으면
-# 설치하고, 없으면 건너뛰되 무엇을 해야 하는지 알린다. push 된 뒤에는 아래
-# else 절을 git clone 으로 바꾸면 된다.
+# 두 repo 는 private 이라 clone 에 인증이 필요하다. 실패하면 경고만 남기고
+# 부트스트랩은 계속 진행한다 (PyPI 본을 대신 깔지는 않는다 -- 그러면 패치가
+# 없는 채로 조용히 동작해서 더 헷갈린다).
 PROJECTS="$HOME/20_Work/01_Asurion/projects"
 if command -v uv &>/dev/null; then
-  for tool in pgcli mycli; do
-    if [ -d "$PROJECTS/$tool" ]; then
-      echo "Installing $tool (editable from $PROJECTS/$tool)..."
-      uv tool install --editable "$PROJECTS/$tool" --force || \
-        echo "  [WARN] $tool editable 설치 실패 — 수동으로 확인하세요"
-    else
-      echo "  [SKIP] $PROJECTS/$tool 없음 — 커스텀 $tool 미설치."
-      echo "         포크 체크아웃을 복원한 뒤: uv tool install --editable $PROJECTS/$tool"
-      echo "         (PyPI 본을 깔면 포크 패치가 없다)"
+  install_editable_tool() {
+    local tool=$1 repo=$2 branch=$3 dir="$PROJECTS/$1"
+    if [ ! -d "$dir" ]; then
+      echo "Cloning $tool ($branch)..."
+      mkdir -p "$PROJECTS"
+      if ! git clone --branch "$branch" "$repo" "$dir"; then
+        echo "  [WARN] $tool clone 실패 (private repo -- gh auth login 확인)."
+        echo "         건너뜀. 수동: git clone -b $branch $repo $dir"
+        echo "               그 뒤: uv tool install --editable $dir"
+        return 0
+      fi
     fi
-  done
+    echo "Installing $tool (editable from $dir)..."
+    uv tool install --editable "$dir" --force ||
+      echo "  [WARN] $tool editable 설치 실패 -- 수동으로 확인하세요"
+  }
+
+  install_editable_tool pgcli https://github.com/ggiho/pgcli.git feature/atuin-history
+  install_editable_tool mycli https://github.com/ggiho/mycli.git feature/table-aliases-and-paste-hygiene
 fi
 
 # TPM (Tmux Plugin Manager)
