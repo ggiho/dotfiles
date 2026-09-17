@@ -47,11 +47,3 @@ else
   mv "$tmp" "$SETTINGS"
   echo "chezmoi: wired Claude notification hooks into $SETTINGS"
 fi
-
-# Build the Claude-icon notifier bundle. macOS takes a notification's icon from the
-# sending bundle, so a custom icon requires a renamed copy of terminal-notifier.
-# Needs its own notification permission — see docs/manual-setup.md.
-BUILDER="$HOME/.local/bin/claude-notifier-build.sh"
-if [ -x "$BUILDER" ]; then
-  "$BUILDER" >/dev/null 2>&1 || echo "chezmoi: Claude notifier bundle build skipped" >&2
-fi
