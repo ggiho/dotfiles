@@ -13,30 +13,42 @@ fi
 # justfile 의 PGQ_PYTHON 이 pgcli 툴 venv 의 인터프리터를 직접 가리키므로
 # (psql 이 없어 psycopg 를 쓴다) redshift-* 레시피가 이 설치에 의존한다.
 #
+# --with 로 얹는 것들:
+#   mycli[all]              \llm / \ai 와 dataframe 변환. 빼면 조용히 사라진다.
+#   psycopg, psycopg-binary justfile 의 redshift-* 레시피가 이 인터프리터를 쓴다.
+#   catppuccin[pygments]    myclirc/pgcli config 의 syntax_style = catppuccin-mocha
+#                           가 실제로 동작하려면 필요하다. 없으면 pygments 가 이름을
+#                           못 찾고 경고 없이 native 로 폴백해서, 테마가 반쯤만
+#                           적용된 상태가 된다.
+#
 # 두 repo 는 public 이라 인증 없이 clone 된다. 그래도 실패하면(네트워크 등)
 # 경고만 남기고 부트스트랩은 계속 진행한다 -- PyPI 본을 대신 깔지는 않는다.
 # 그러면 패치가 없는 채로 조용히 동작해서 더 헷갈린다.
 PROJECTS="$HOME/20_Work/01_Asurion/projects"
 if command -v uv &>/dev/null; then
+  # 4번째 인자부터는 uv tool install 로 그대로 넘어간다 (--with 등).
   install_editable_tool() {
     local tool=$1 repo=$2 branch=$3 dir="$PROJECTS/$1"
+    shift 3
     if [ ! -d "$dir" ]; then
       echo "Cloning $tool ($branch)..."
       mkdir -p "$PROJECTS"
       if ! git clone --branch "$branch" "$repo" "$dir"; then
         echo "  [WARN] $tool clone 실패 -- 네트워크나 repo 상태를 확인하세요."
         echo "         건너뜀. 수동: git clone -b $branch $repo $dir"
-        echo "               그 뒤: uv tool install --editable $dir"
+        echo "               그 뒤: uv tool install --editable $dir $*"
         return 0
       fi
     fi
     echo "Installing $tool (editable from $dir)..."
-    uv tool install --editable "$dir" --force ||
+    uv tool install --editable "$dir" --force "$@" ||
       echo "  [WARN] $tool editable 설치 실패 -- 수동으로 확인하세요"
   }
 
-  install_editable_tool pgcli https://github.com/ggiho/pgcli.git feature/atuin-history
-  install_editable_tool mycli https://github.com/ggiho/mycli.git feature/table-aliases-and-paste-hygiene
+  install_editable_tool pgcli https://github.com/ggiho/pgcli.git feature/atuin-history \
+    --with "psycopg<3.3" --with "psycopg-binary<3.3" --with "catppuccin[pygments]"
+  install_editable_tool mycli https://github.com/ggiho/mycli.git feature/table-aliases-and-paste-hygiene \
+    --with "mycli[all]" --with "catppuccin[pygments]"
 fi
 
 # TPM (Tmux Plugin Manager)
