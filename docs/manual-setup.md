@@ -7,12 +7,17 @@
 | 대상 | 위치 | 안 하면 |
 |------|------|---------|
 | terminal-notifier 알림 | System Settings → Notifications → terminal-notifier | Claude 작업완료 알림이 **조용히** 실패. `osascript` 폴백으로 알림은 뜨지만 **클릭해도 pane 점프 안 됨** |
+| Claude Code Notifier 알림 | System Settings → Notifications → Claude Code Notifier | 알림 아이콘이 Claude 로 안 바뀜. 기존 terminal-notifier 로 폴백되므로 **기능 손실은 없다** |
 | kanata Input Monitoring | System Settings → Privacy & Security → Input Monitoring | 키 리맵 동작 안 함 |
 | kanata Accessibility | System Settings → Privacy & Security → Accessibility | 위와 동일 |
 
 terminal-notifier 권한은 CLI로 리셋할 수 없다. `tccutil reset UserNotification fr.julienxx.oss.terminal-notifier`는
 최신 macOS에서 거부된다(2026-09 확인: `tccutil: Failed to reset ...`, rc=70). 한 번 거부 상태가 되면
 System Settings에서 직접 켜는 방법밖에 없다.
+
+알림 아이콘을 Claude 로 바꾸려면 별도 번들이 필요하다(`~/.local/bin/claude-notifier-build.sh`가 만든다).
+macOS 는 알림 아이콘을 **보낸 번들**에서 가져오고 이를 덮어쓸 API 가 없어서(terminal-notifier 3.0.0 에서
+`-appIcon`·`-sender` 제거됨) 번들을 복사하는 것이 공식 우회책이다. 새 bundle id 라 권한도 새로 받아야 한다.
 
 kanata는 권한 관련 증상·트러블슈팅이 길어서 별도 문서에 있다 → `dot_config/kanata/README.md`
 

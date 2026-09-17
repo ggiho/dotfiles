@@ -107,15 +107,31 @@ notify_osascript() {
   osascript -e "$s" >/dev/null 2>&1 || true
 }
 
-if command -v terminal-notifier >/dev/null 2>&1; then
-  args=(-title "$title" -message "$body" -group "claude-$mode-$session")
-  [ -n "$subtitle" ] && args+=(-subtitle "$subtitle")
-  [ -n "$SOUND" ] && args+=(-sound "$SOUND")
-  [ -n "$jump" ] && args+=(-execute "$jump")
-  if terminal-notifier "${args[@]}" >/dev/null 2>&1; then log "sent: $subtitle | $body"
-  else log "terminal-notifier failed -> osascript"; notify_osascript; fi
+# Notifier candidates, best first. macOS takes a notification's icon from the sending
+# bundle and offers no way to override it, so the Claude icon means a separate bundle
+# (~/Applications/Claude Code Notifier.app, built by claude-notifier-build.sh) — and
+# that bundle id needs its own notification permission. If it is not granted yet, fall
+# back to plain terminal-notifier so click-to-jump never regresses over an icon.
+notifiers=(); labels=()
+claude_app="$HOME/Applications/Claude Code Notifier.app/Contents/MacOS/terminal-notifier"
+[ -x "$claude_app" ] && { notifiers+=("$claude_app"); labels+=("claude-icon"); }
+plain=$(command -v terminal-notifier 2>/dev/null || true)
+[ -n "$plain" ] && { notifiers+=("$plain"); labels+=("terminal-notifier"); }
+
+args=(-title "$title" -message "$body" -group "claude-$mode-$session")
+[ -n "$subtitle" ] && args+=(-subtitle "$subtitle")
+[ -n "$SOUND" ] && args+=(-sound "$SOUND")
+[ -n "$jump" ] && args+=(-execute "$jump")
+
+sent=""
+for i in "${!notifiers[@]}"; do
+  if "${notifiers[$i]}" "${args[@]}" >/dev/null 2>&1; then sent="${labels[$i]}"; break; fi
+done
+
+if [ -n "$sent" ]; then
+  log "sent via $sent: $subtitle | $body"
 else
-  log "sent via osascript: $subtitle | $body"
+  log "no notifier permitted -> osascript"
   notify_osascript
 fi
 exit 0
