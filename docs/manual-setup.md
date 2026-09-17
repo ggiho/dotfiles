@@ -37,13 +37,13 @@ kanata는 권한 관련 증상·트러블슈팅이 길어서 별도 문서에 �
 PyPI 본이 아니라 **로컬 포크의 editable 설치**다. Brewfile에 `uv "pgcli"` / `uv "mycli"`를
 적으면 업스트림이 깔려 패치가 사라지므로 일부러 빼 뒀다.
 
-| 도구 | repo (private) | 브랜치 | 패치 |
+| 도구 | repo | 브랜치 | 패치 |
 |------|----------------|--------|------|
 | pgcli | `ggiho/pgcli` | `feature/atuin-history` | atuin 백엔드 쿼리 히스토리 + Up-arrow 피커 |
 | mycli | `ggiho/mycli` | `feature/table-aliases-and-paste-hygiene` | `\t`·`\d`·`\dn`·`\list` psql 스타일 별칭, 붙여넣기/source/편집 SQL의 invisible 문자 제거 |
 
-`run_once_bootstrap.sh`가 clone + `uv tool install --editable`까지 해주지만 **private repo라
-`gh auth login`이 먼저**다. 실패하면 경고만 남기고 넘어가므로 수동으로:
+`run_once_bootstrap.sh`가 clone + `uv tool install --editable`까지 해준다. 둘 다 public이라
+인증은 필요 없다. 실패하면 경고만 남기고 넘어가므로 그때는 수동으로:
 
 ```bash
 PROJECTS=~/20_Work/01_Asurion/projects

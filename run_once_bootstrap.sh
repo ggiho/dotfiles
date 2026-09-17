@@ -13,9 +13,9 @@ fi
 # justfile 의 PGQ_PYTHON 이 pgcli 툴 venv 의 인터프리터를 직접 가리키므로
 # (psql 이 없어 psycopg 를 쓴다) redshift-* 레시피가 이 설치에 의존한다.
 #
-# 두 repo 는 private 이라 clone 에 인증이 필요하다. 실패하면 경고만 남기고
-# 부트스트랩은 계속 진행한다 (PyPI 본을 대신 깔지는 않는다 -- 그러면 패치가
-# 없는 채로 조용히 동작해서 더 헷갈린다).
+# 두 repo 는 public 이라 인증 없이 clone 된다. 그래도 실패하면(네트워크 등)
+# 경고만 남기고 부트스트랩은 계속 진행한다 -- PyPI 본을 대신 깔지는 않는다.
+# 그러면 패치가 없는 채로 조용히 동작해서 더 헷갈린다.
 PROJECTS="$HOME/20_Work/01_Asurion/projects"
 if command -v uv &>/dev/null; then
   install_editable_tool() {
@@ -24,7 +24,7 @@ if command -v uv &>/dev/null; then
       echo "Cloning $tool ($branch)..."
       mkdir -p "$PROJECTS"
       if ! git clone --branch "$branch" "$repo" "$dir"; then
-        echo "  [WARN] $tool clone 실패 (private repo -- gh auth login 확인)."
+        echo "  [WARN] $tool clone 실패 -- 네트워크나 repo 상태를 확인하세요."
         echo "         건너뜀. 수동: git clone -b $branch $repo $dir"
         echo "               그 뒤: uv tool install --editable $dir"
         return 0
