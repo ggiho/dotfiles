@@ -234,17 +234,17 @@ locks = "SELECT r.trx_id AS waiting_trx, r.trx_mysql_thread_id AS waiting_pid, r
 trx = "SELECT trx_id, trx_state, trx_started, TIMESTAMPDIFF(SECOND, trx_started, NOW()) AS age_sec, trx_mysql_thread_id AS pid, trx_rows_locked, trx_rows_modified, LEFT(trx_query, 100) AS query FROM information_schema.innodb_trx ORDER BY trx_started"
 
 # --- Table / Schema Info ---
-meta = "SELECT table_name, engine, table_rows, ROUND(data_length/1024/1024, 2) AS data_mb, ROUND(index_length/1024/1024, 2) AS idx_mb, ROUND((data_length+index_length)/1024/1024, 2) AS total_mb, create_time, update_time FROM information_schema.tables WHERE table_schema = '$1' AND table_name LIKE '%$2%' ORDER BY data_length + index_length DESC"
+meta = "SELECT table_name, engine, table_rows, ROUND(data_length/1024/1024, 2) AS data_mb, ROUND(index_length/1024/1024, 2) AS idx_mb, ROUND((data_length+index_length)/1024/1024, 2) AS total_mb, create_time, update_time FROM information_schema.tables WHERE table_schema = IF('{{ kv.d }}' = '', DATABASE(), '{{ kv.d }}') AND table_name LIKE '%{{ kv.t }}%' ORDER BY data_length + index_length DESC"
 dbsize = "SELECT table_schema AS db, COUNT(*) AS tables, ROUND(SUM(data_length)/1024/1024, 1) AS data_mb, ROUND(SUM(index_length)/1024/1024, 1) AS idx_mb, ROUND(SUM(data_length+index_length)/1024/1024, 1) AS total_mb FROM information_schema.tables GROUP BY table_schema ORDER BY total_mb DESC"
-idx = "SELECT table_name, index_name, GROUP_CONCAT(column_name ORDER BY seq_in_index) AS columns, index_type, non_unique FROM information_schema.statistics WHERE table_schema = '$1' AND table_name LIKE '%$2%' GROUP BY table_name, index_name, index_type, non_unique ORDER BY table_name, index_name"
+idx = "SELECT table_name, index_name, GROUP_CONCAT(column_name ORDER BY seq_in_index) AS columns, index_type, non_unique FROM information_schema.statistics WHERE table_schema = IF('{{ kv.d }}' = '', DATABASE(), '{{ kv.d }}') AND table_name LIKE '%{{ kv.t }}%' GROUP BY table_name, index_name, index_type, non_unique ORDER BY table_name, index_name"
 
 # --- Performance ---
 slow = "SELECT DIGEST_TEXT AS query, COUNT_STAR AS cnt, ROUND(AVG_TIMER_WAIT/1e9, 2) AS avg_ms, ROUND(SUM_TIMER_WAIT/1e9, 2) AS total_ms, SUM_ROWS_EXAMINED AS rows_exam, SUM_ROWS_SENT AS rows_sent FROM performance_schema.events_statements_summary_by_digest ORDER BY SUM_TIMER_WAIT DESC LIMIT 20"
-unused_idx = "SELECT s.table_schema, s.table_name, s.index_name, s.column_name FROM information_schema.statistics s LEFT JOIN performance_schema.table_io_waits_summary_by_index_usage u ON s.table_schema = u.OBJECT_SCHEMA AND s.table_name = u.OBJECT_NAME AND s.index_name = u.INDEX_NAME WHERE u.INDEX_NAME IS NULL AND s.table_schema = '$1' AND s.index_name != 'PRIMARY' ORDER BY s.table_name, s.index_name"
-tstat = "SELECT OBJECT_NAME AS tbl, COUNT_READ AS reads, COUNT_WRITE AS writes, COUNT_FETCH AS fetches, COUNT_INSERT AS inserts, COUNT_UPDATE AS updates, COUNT_DELETE AS deletes FROM performance_schema.table_io_waits_summary_by_table WHERE OBJECT_SCHEMA = '$1' ORDER BY COUNT_READ + COUNT_WRITE DESC LIMIT 20"
+unused_idx = "SELECT s.table_schema, s.table_name, s.index_name, s.column_name FROM information_schema.statistics s LEFT JOIN performance_schema.table_io_waits_summary_by_index_usage u ON s.table_schema = u.OBJECT_SCHEMA AND s.table_name = u.OBJECT_NAME AND s.index_name = u.INDEX_NAME WHERE u.INDEX_NAME IS NULL AND s.table_schema = IF('{{ kv.d }}' = '', DATABASE(), '{{ kv.d }}') AND s.table_name LIKE '%{{ kv.t }}%' AND s.index_name != 'PRIMARY' ORDER BY s.table_name, s.index_name"
+tstat = "SELECT OBJECT_NAME AS tbl, COUNT_READ AS reads, COUNT_WRITE AS writes, COUNT_FETCH AS fetches, COUNT_INSERT AS inserts, COUNT_UPDATE AS updates, COUNT_DELETE AS deletes FROM performance_schema.table_io_waits_summary_by_table WHERE OBJECT_SCHEMA = IF('{{ kv.d }}' = '', DATABASE(), '{{ kv.d }}') AND OBJECT_NAME LIKE '%{{ kv.t }}%' ORDER BY COUNT_READ + COUNT_WRITE DESC LIMIT 20"
 
 # --- Admin ---
-vars = "SHOW GLOBAL VARIABLES LIKE '%$1%'"
+vars = "SHOW GLOBAL VARIABLES LIKE '%{{ kv.n }}%'"
 grants = SHOW GRANTS FOR CURRENT_USER()
 repl = SHOW REPLICA STATUS
 [init-commands]
