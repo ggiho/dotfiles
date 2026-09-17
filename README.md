@@ -16,6 +16,8 @@ curl -fsSL https://raw.githubusercontent.com/ggiho/dotfiles/main/install.sh | ba
 4. Brewfile로 패키지 설치
 5. macOS 기본 설정 적용
 
+자동화되지 않는 항목(macOS 권한, 비밀 파일, 앱 내부 설치)은 [docs/manual-setup.md](docs/manual-setup.md) 참고.
+
 ---
 
 ## 관리
@@ -55,6 +57,8 @@ chezmoi add ~/.config/brew/Brewfile
 | `install.sh` | 새 Mac 초기 세팅 스크립트 |
 | `run_once_bootstrap.sh` | Brewfile로 패키지 설치 (최초 1회) |
 | `run_onchange_macos-defaults.sh` | macOS 시스템 설정 (변경 시 재실행) |
+| `run_onchange_after_claude-notify-hooks.sh` | Claude Code 알림 hook을 settings.json에 병합 |
+| `dot_claude/hooks/` | Claude Code 알림 hook 스크립트 |
 | `dot_zshrc` | zsh 설정 |
 | `dot_config/wezterm/` | WezTerm 설정 |
 | `dot_config/brew/Brewfile` | Homebrew 패키지 목록 |
