@@ -66,20 +66,29 @@ cwd=$(printf '%s' "$payload" | jq -r '.cwd // empty' 2>/dev/null || true)
 subtitle=""; jump=""
 if [ -n "${TMUX_PANE:-}" ] && command -v tmux >/dev/null 2>&1; then
   fields=$(tmux display-message -p -t "$TMUX_PANE" \
-    '#{session_name}|#{window_index}|#{pane_index}|#{window_name}|#{window_active}|#{pane_active}' \
+    '#{session_name}|#{window_index}|#{pane_index}|#{window_name}|#{window_active}|#{pane_active}|#{window_zoomed_flag}' \
     2>/dev/null || true)
   if [ -n "$fields" ]; then
-    IFS='|' read -r sess win pane winname win_active pane_active <<<"$fields"
+    IFS='|' read -r sess win pane winname win_active pane_active zoomed <<<"$fields"
     subtitle="$sess:$win.$pane"
     [ -n "$winname" ] && [ "$winname" != "$sess" ] && subtitle="$subtitle ($winname)"
 
     # gate 2: is this pane already on screen, in the app the user is looking at?
     # Needs a client attached to THIS session — window_active is only true within it.
+    #
+    # On screen does NOT mean focused: in a split window every pane is visible, so a
+    # pane you can read is not worth a notification even when the cursor is elsewhere.
+    # The exception is zoom — a zoomed pane hides its siblings, so an unfocused pane in
+    # a zoomed window is genuinely off screen.
+    onscreen=0
+    if [ "$win_active" = 1 ] && { [ "$pane_active" = 1 ] || [ "${zoomed:-0}" != 1 ]; }; then
+      onscreen=1
+    fi
     clients=$(tmux list-clients -t "$sess" -F '#{client_pid}' 2>/dev/null || true)
     front=$(lsappinfo info -only pid "$(lsappinfo front 2>/dev/null)" 2>/dev/null |
             sed -n 's/.*"pid"=\([0-9]\{1,\}\).*/\1/p')
-    log "gate2 $subtitle win_active=$win_active pane_active=$pane_active clients=[$(printf '%s' "$clients" | tr '\n' ',')] front=${front:-NONE}$([ -n "${front:-}" ] && printf ' (%s)' "$(lsappinfo info -only bundleID "$front" 2>/dev/null | sed -n 's/.*="\(.*\)"/\1/p')")"
-    if [ "$win_active" = 1 ] && [ "$pane_active" = 1 ] && [ -n "$clients" ]; then
+    log "gate2 $subtitle win_active=$win_active pane_active=$pane_active zoomed=${zoomed:-?} onscreen=$onscreen clients=[$(printf '%s' "$clients" | tr '\n' ',')] front=${front:-NONE}$([ -n "${front:-}" ] && printf ' (%s)' "$(lsappinfo info -only bundleID "$front" 2>/dev/null | sed -n 's/.*="\(.*\)"/\1/p')")"
+    if [ "$onscreen" = 1 ] && [ -n "$clients" ]; then
       if [ -n "$front" ]; then
         while read -r cpid; do
           [ -n "$cpid" ] || continue
