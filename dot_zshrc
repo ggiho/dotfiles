@@ -115,3 +115,13 @@ bindkey '^O' edit-command-line
   # export VISUAL=nvim
 
 zstyle ':zle:edit-command-line' editor nvim
+
+# --- keep ~/.local/bin ahead of Homebrew ---
+# uv tool installs the local pgcli / mycli forks into ~/.local/bin. The block
+# near the top prepends it, but several later blocks prepend to PATH again, so
+# it ended up 23rd while /opt/homebrew/bin sat 3rd -- a `brew install pgcli`
+# from years ago was silently winning, and the fork's patches were absent.
+# Moving it to the front last is the fix; the alias that used to paper over this
+# is no longer load-bearing. ${path:#...} drops the old entry rather than
+# duplicating it.
+path=("$HOME/.local/bin" ${path:#$HOME/.local/bin})
