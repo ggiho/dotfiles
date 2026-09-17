@@ -62,6 +62,10 @@ Library/Preferences/org.pqrs.Karabiner-Updater.plist
 .config/mycli
 .config/mycli/**
 
+# --- Claude Code 알림 hook 런타임 산출물 (스크립트만 추적, 상태는 로컬)
+.claude/hooks/turn-notify.log
+.claude/settings.json.bak.*
+
 # --- 히스토리·로그·OS 노이즈 --------------------------------------------------
 .zsh_history
 .bash_history
