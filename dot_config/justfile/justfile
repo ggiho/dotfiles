@@ -35,7 +35,7 @@
 HOSTS_FILE      := "$HOME/.config/mysql/hosts"
 SANITIZE_SCRIPT := "$HOME/.config/mysql/sanitize_users.py"
 DDB_SCRIPT_DIR  := env_var_or_default("DDB_SCRIPT_DIR", env_var("HOME") + "/10_Database/AWS/dynamodb")
-DMSCTL_ROOT     := env_var_or_default("DMSCTL_ROOT", env_var("HOME") + "/20_Work/01_Asurion/scripts/aws/dms")
+DMSCTL_ROOT     := env_var_or_default("DMSCTL_ROOT", env_var("HOME") + "/src/github.com/ggiho/dmsctl")
 # Table name list for the ddb-* pickers; ddb-describe and ddb-count both need it.
 DDB_TABLES      := 'aws dynamodb list-tables --query "TableNames[]" --output text | tr "\t" "\n"'
 
@@ -967,7 +967,7 @@ mysql-diff:
         # packages/schema-diff is a library with no CLI, so there is nothing to
         # shell out to -- point at the UI instead of half-reimplementing it here.
         echo "Schema diff lives in the db-portal (packages/schema-diff):" >&2
-        echo "  cd ~/20_Work/01_Asurion/projects/db-portal && pnpm dev   ->  http://localhost:3000" >&2
+        echo "  cd ~/src/github.com/ggiho/db-portal && pnpm dev   ->  http://localhost:3000" >&2
         echo "It compares tables/columns/indexes/constraints/views/routines/triggers/" >&2
         echo "events/partitions with severity and generates the sync DDL." >&2 ;;
       quit|*) break ;;

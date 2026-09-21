@@ -85,7 +85,7 @@ alias gre='git reset'
 if [[ -d "$ASURION_HOME" ]]; then
 # just
 export JUSTFILE="${JUSTFILE:-$HOME/.config/justfile/justfile}"
-export DMSCTL_ROOT="$HOME/20_Work/01_Asurion/scripts/aws/dms"
+export DMSCTL_ROOT="${DMSCTL_ROOT:-$HOME/src/github.com/ggiho/dmsctl}"
 export DDB_SCRIPT_DIR="$HOME/10_Database/AWS/dynamodb"
 alias vj="vi $JUSTFILE"
 unalias j 2>/dev/null
@@ -376,7 +376,7 @@ export NOTES_INBOX="$NOTES_DIR/00 Inbox"
 alias vsync="$HOME/.local/bin/obsidian-vault-sync.sh"
 
 # gpub : 볼트 공개노트(publish:true) → Astro 블로그 빌드 + Cloudflare 배포 (한 방)
-export BLOG_DIR="${BLOG_DIR:-$HOME/30_Projects/01_Personal/blog}"
+export BLOG_DIR="${BLOG_DIR:-$HOME/src/github.com/ggiho/blog}"
 alias gpub='(cd "$BLOG_DIR" && npm run publish:site && npm run deploy)'
 
 # n [제목...] : 새 노트를 00 Inbox에 만들고 nvim으로 편집
