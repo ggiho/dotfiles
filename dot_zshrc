@@ -70,12 +70,24 @@ zstyle ':fzf-tab:*' fzf-flags --layout=reverse --info=inline-right --highlight-l
 # footer row is unaccounted for and the picker silently falls back to zsh's
 # plain listing. Verified: identical flags minus --footer render correctly.
 [[ -n $TMUX ]] && zstyle ':fzf-tab:*' fzf-command ftb-tmux-popup
-source /opt/homebrew/opt/fzf-tab/share/fzf-tab/fzf-tab.zsh
+_fzf_tab=/opt/homebrew/opt/fzf-tab/share/fzf-tab/fzf-tab.zsh
+if [ -f "$_fzf_tab" ]; then
+  source "$_fzf_tab"
+else
+  # `menu no` above exists only to hand the prefix to fzf-tab. With the plugin
+  # absent it would leave completion with no menu at all, so put zsh's own back.
+  zstyle ':completion:*' menu select
+fi
+unset _fzf_tab
 
-source $(brew --prefix)/share/zsh-syntax-highlighting/zsh-syntax-highlighting.zsh
+_zsh_hl=$(brew --prefix)/share/zsh-syntax-highlighting/zsh-syntax-highlighting.zsh
+[ -f "$_zsh_hl" ] && source "$_zsh_hl"
+unset _zsh_hl
 ZSH_AUTOSUGGEST_HIGHLIGHT_STYLE='fg=#8a8a8a'
 
-source $(brew --prefix)/share/zsh-autosuggestions/zsh-autosuggestions.zsh
+_zsh_as=$(brew --prefix)/share/zsh-autosuggestions/zsh-autosuggestions.zsh
+[ -f "$_zsh_as" ] && source "$_zsh_as"
+unset _zsh_as
 
 # Aliases
 [ -f "$HOME/.config/zsh/aliases.zsh" ] && source "$HOME/.config/zsh/aliases.zsh"
