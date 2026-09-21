@@ -75,7 +75,7 @@ cask "slack"
 cask "wezterm"
 cask "zen"
 # pgcli / mycli 는 PyPI 본이 아니라 로컬 포크의 editable 설치다.
-#   ~/20_Work/01_Asurion/projects/{pgcli,mycli}
+#   ~/src/github.com/ggiho/{pgcli,mycli}  (루트는 DOTFILES_SRC_ROOT 로 변경 가능)
 #   uv tool install --editable <path>
 # 여기에 uv "pgcli" / uv "mycli" 를 적으면 업스트림이 깔려 포크 패치가
 # (pgcli: atuin 히스토리, mycli: \t·\d 별칭, paste hygiene) 사라진다.

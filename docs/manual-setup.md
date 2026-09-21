@@ -46,7 +46,7 @@ PyPI 본이 아니라 **로컬 포크의 editable 설치**다. Brewfile에 `uv "
 인증은 필요 없다. 실패하면 경고만 남기고 넘어가므로 그때는 수동으로:
 
 ```bash
-PROJECTS=~/20_Work/01_Asurion/projects
+PROJECTS=~/src/github.com/ggiho
 git clone -b feature/atuin-history https://github.com/ggiho/pgcli.git $PROJECTS/pgcli
 git clone -b feature/table-aliases-and-paste-hygiene https://github.com/ggiho/mycli.git $PROJECTS/mycli
 uv tool install --editable $PROJECTS/pgcli
