@@ -15,24 +15,6 @@ docs/**
 # --- nvim auto-generated files
 .config/nvim/lazy-lock.json
 
-{{- if ne .chezmoi.username "giho.seong" }}
-# --- work-only commands and database helpers
-.config/brew/Brewfile
-.config/justfile
-.config/justfile/**
-.config/mysql
-.config/mysql/**
-.config/zsh/tests
-.config/zsh/tests/**
-.mysqlsh
-.mysqlsh/**
-# --- work-only home areas (scaffolded only on the work machine)
-10_Database
-10_Database/**
-20_Work
-20_Work/**
-{{- end }}
-
 # --- Karabiner legacy config (Kanata only needs the VirtualHIDDevice runtime)
 .config/karabiner/**
 Library/Preferences/org.pqrs.Karabiner-Elements*.plist
