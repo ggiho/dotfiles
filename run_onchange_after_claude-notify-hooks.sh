@@ -29,7 +29,8 @@ tmp=$(mktemp)
 jq \
   --arg start "$HOOK start" \
   --arg stop  "$HOOK stop" \
-  --arg ask   "$HOOK ask" '
+  --arg ask   "$HOOK ask" \
+  --arg fail  "$HOOK fail" '
   def ensure($event; $cmd; $extra):
     .hooks[$event] = ((.hooks[$event] // [])
       | if any(.[]; (.hooks // []) | any(.command == $cmd))
@@ -39,6 +40,7 @@ jq \
     ensure("UserPromptSubmit"; $start; {timeout: 5})
   | ensure("Stop";             $stop;  {async: true, timeout: 15})
   | ensure("Notification";     $ask;   {async: true, timeout: 15})
+  | ensure("StopFailure";      $fail;  {async: true, timeout: 15})
 ' "$SETTINGS" > "$tmp"
 
 if cmp -s "$tmp" "$SETTINGS"; then

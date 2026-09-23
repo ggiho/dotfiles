@@ -3,7 +3,8 @@
 #
 #   turn-notify.sh start   <- UserPromptSubmit: start the clock, disarm any pending notice
 #   turn-notify.sh stop    <- Stop: arm a completion notice (does NOT notify yet)
-#   turn-notify.sh ask      <- Notification: deliver the armed notice, or a real prompt
+#   turn-notify.sh fail    <- StopFailure: arm a notice marked as an aborted turn
+#   turn-notify.sh ask     <- Notification: deliver the armed notice, or a real prompt
 #   turn-notify.sh probe   <- diagnostics only: log what the hook received
 #
 # Why arming instead of notifying on Stop: Stop means "the turn ended", not "the work
@@ -36,10 +37,28 @@ stamp="$STATE_DIR/$session"
 pending="$STATE_DIR/$session.pending"
 
 log() {
-  printf '%s [%s] %s\n' "$(date '+%F %T')" "$mode" "$1" >> "$LOG" 2>/dev/null
+  printf '%s [%s %s] %s\n' "$(date '+%F %T')" "${session:0:8}" "$mode" "$1" >> "$LOG" 2>/dev/null
   if [ "$(wc -l < "$LOG" 2>/dev/null || echo 0)" -gt 800 ]; then
     tail -400 "$LOG" > "$LOG.tmp" 2>/dev/null && mv "$LOG.tmp" "$LOG" 2>/dev/null
   fi
+}
+
+# What the turn was about, for the notification body. Claude Code writes a
+# purpose-built `last-prompt` record into the session transcript; jq slices by
+# codepoint so multi-byte text is never cut mid-character.
+last_prompt() {
+  local tp="$1"
+  [ -n "$tp" ] && [ -f "$tp" ] || return 0
+  jq -r 'select(.type=="last-prompt") | (.lastPrompt // "")
+         | gsub("\\s+"; " ")
+         | if (length > 64) then .[0:63] + "…" else . end' "$tp" 2>/dev/null | tail -1
+}
+
+resolve_transcript() {
+  local tp
+  tp=$(printf '%s' "$payload" | jq -r '.transcript_path // empty' 2>/dev/null || true)
+  [ -n "$tp" ] && [ -f "$tp" ] && { printf '%s' "$tp"; return; }
+  /bin/ls -1t "$HOME"/.claude/projects/*/"$session".jsonl 2>/dev/null | head -1
 }
 
 case "$mode" in
@@ -51,17 +70,21 @@ case "$mode" in
   probe)
     log "stdin=${#payload}B session=$session TMUX_PANE=${TMUX_PANE:-UNSET} payload=$payload"
     exit 0 ;;
-  stop)
+  stop|fail)
     started=$(cat "$stamp" 2>/dev/null || true)
     rm -f "$stamp" 2>/dev/null
     [ -n "$started" ] || { log "skip: no stamp (clear/compact/resume)"; exit 0; }
     elapsed=$(( $(date +%s) - started ))
-    [ "$elapsed" -ge "$MIN_SECONDS" ] || { log "skip: ${elapsed}s < ${MIN_SECONDS}s"; exit 0; }
+    # a turn that died deserves a notice regardless of how briefly it ran
+    if [ "$mode" != fail ] && [ "$elapsed" -lt "$MIN_SECONDS" ]; then
+      log "skip: ${elapsed}s < ${MIN_SECONDS}s"; exit 0
+    fi
     if [ "$elapsed" -ge 60 ]; then dur="$(( elapsed / 60 ))m $(( elapsed % 60 ))s"
     else dur="${elapsed}s"; fi
+    [ "$mode" = fail ] && status=failed || status=done
     mkdir -p "$STATE_DIR" 2>/dev/null
-    printf '%s\t%s\n' "$(date +%s)" "$dur" > "$pending"
-    log "armed: $dur (waiting for idle confirmation)"
+    printf '%s\t%s\t%s\t%s\n' "$(date +%s)" "$dur" "$status" "$(last_prompt "$(resolve_transcript)")" > "$pending"
+    log "armed[$status]: $dur (waiting for idle confirmation)"
     exit 0 ;;
 esac
 
@@ -71,13 +94,15 @@ message=$(printf '%s' "$payload" | jq -r '.message // empty' 2>/dev/null || true
 if printf '%s' "$message" | grep -qi 'waiting for your input'; then
   # Claude Code says the session is genuinely idle — the armed notice is real.
   [ -f "$pending" ] || { log "skip: idle but nothing armed"; exit 0; }
-  IFS=$'\t' read -r armed_at dur < "$pending"
+  IFS=$'\t' read -r armed_at dur status task < "$pending"
   rm -f "$pending"
   age=$(( $(date +%s) - ${armed_at:-0} ))
   [ "$age" -le "$PENDING_TTL" ] || { log "skip: armed notice stale (${age}s)"; exit 0; }
   kind=done
-  body="작업 완료 · $dur"
+  [ "${status:-done}" = failed ] && kind=failed
+  body="${task:-}"
   SOUND="${CLAUDE_NOTIFY_SOUND-Glass}"
+  [ "$kind" = failed ] && SOUND="${CLAUDE_NOTIFY_ASK_SOUND-Ping}"
 else
   # a real prompt: permission request, or anything else Claude Code asks for
   kind=ask
@@ -86,7 +111,7 @@ else
 fi
 
 cwd=$(printf '%s' "$payload" | jq -r '.cwd // empty' 2>/dev/null || true)
-[ -n "$cwd" ] && body="$(basename "$cwd") — $body"
+where=""; [ -n "$cwd" ] && where=$(basename "$cwd")
 
 # ------------------------------------------------------- pane label + gate 2
 subtitle=""; jump=""
@@ -130,7 +155,18 @@ if [ -n "${TMUX_PANE:-}" ] && command -v tmux >/dev/null 2>&1; then
 fi
 
 # ------------------------------------------------------------------- deliver
-[ "$kind" = ask ] && title="Claude Code — 확인 필요" || title="Claude Code"
+case "$kind" in
+  ask)    title="Claude Code — 확인 필요" ;;
+  failed) title="Claude Code — 턴 중단" ;;
+  *)      title="Claude Code" ;;
+esac
+
+# subtitle carries where and how long; the body carries what the turn was about
+meta="$where"
+[ -n "$subtitle" ] && meta="${meta:+$meta · }$subtitle"
+[ -n "${dur:-}" ] && meta="${meta:+$meta · }$dur"
+subtitle="$meta"
+[ -n "$body" ] || body=$([ "$kind" = failed ] && echo "턴이 중단됐다" || echo "작업 완료")
 
 notify_osascript() {
   esc() { printf '%s' "$1" | sed 's/[\\"]/\\&/g'; }
