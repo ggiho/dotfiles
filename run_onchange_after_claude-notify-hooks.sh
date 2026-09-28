@@ -30,7 +30,8 @@ jq \
   --arg start "$HOOK start" \
   --arg stop  "$HOOK stop" \
   --arg ask   "$HOOK ask" \
-  --arg fail  "$HOOK fail" '
+  --arg fail  "$HOOK fail" \
+  --arg end   "$HOOK end" '
   def ensure($event; $cmd; $extra):
     .hooks[$event] = ((.hooks[$event] // [])
       | if any(.[]; (.hooks // []) | any(.command == $cmd))
@@ -41,6 +42,7 @@ jq \
   | ensure("Stop";             $stop;  {async: true, timeout: 15})
   | ensure("Notification";     $ask;   {async: true, timeout: 15})
   | ensure("StopFailure";      $fail;  {async: true, timeout: 15})
+  | ensure("SessionEnd";       $end;   {timeout: 5})
 ' "$SETTINGS" > "$tmp"
 
 if cmp -s "$tmp" "$SETTINGS"; then

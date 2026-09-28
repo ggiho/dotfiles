@@ -5,6 +5,7 @@
 #   turn-notify.sh stop    <- Stop: arm a completion notice (does NOT notify yet)
 #   turn-notify.sh fail    <- StopFailure: arm a notice marked as an aborted turn
 #   turn-notify.sh ask     <- Notification: deliver the armed notice, or a real prompt
+#   turn-notify.sh end     <- SessionEnd: drop this session's pending and parked notices
 #   turn-notify.sh watch   <- (internal) detached follow-up, see below
 #   turn-notify.sh probe   <- diagnostics only: log what the hook received
 #
@@ -292,6 +293,16 @@ case "$mode" in
     log "stdin=${#payload}B TMUX_PANE=${TMUX_PANE:-UNSET} payload=$payload"
     exit 0 ;;
 
+  end)
+    # You closed the session, and its background work died with it. Left alone, a parked
+    # notice would see that work "end without waking the session" and announce a finish
+    # that never happened. Watchers find their state gone and quit on their next check.
+    had=""
+    for f in "$pending" "$held" "$carry"; do [ -f "$f" ] && had="$had ${f##*.}"; done
+    rm -f "$stamp" "$pending" "$held" "$carry" "$sent" "$ctx"
+    [ -n "$had" ] && log "session ended ($(field .reason)): dropped$had"
+    exit 0 ;;
+
   stop|fail)
     started=$(cat "$stamp" 2>/dev/null || true)
     rm -f "$stamp"
@@ -483,6 +494,17 @@ if [ -n "${TMUX_PANE:-}" ] && command -v tmux >/dev/null 2>&1; then
 
     jump="$HOME/.claude/hooks/tmux-jump.sh $TMUX_PANE"
   fi
+fi
+if [ -z "$subtitle" ]; then
+  # Outside tmux (Claude Desktop, an IDE, a bare terminal) there is no pane to test, so
+  # the app hosting this session stands in for the screen: frontmost means you are on it.
+  front=$(lsappinfo info -only pid "$(lsappinfo front 2>/dev/null)" 2>/dev/null |
+          sed -n 's/.*"pid"=\([0-9]\{1,\}\).*/\1/p')
+  p=$PPID
+  while [ -n "$front" ] && [ -n "$p" ] && [ "$p" != 0 ] && [ "$p" != 1 ]; do
+    [ "$p" = "$front" ] && { log "skip: the app hosting this session is frontmost"; exit 0; }
+    p=$(ps -o ppid= -p "$p" 2>/dev/null | tr -d ' ')
+  done
 fi
 
 # ------------------------------------------------------------------- deliver

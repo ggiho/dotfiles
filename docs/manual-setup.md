@@ -92,7 +92,13 @@ brew bundle install --no-upgrade --file ~/.config/brew/Brewfile   # 업그레이
 Claude 알림이 동작하는지 확인:
 
 ```bash
-tail -5 ~/.claude/hooks/turn-notify.log   # 턴마다 2줄. gate2 판단 근거와 생략 사유가 남는다
+tail -20 ~/.claude/hooks/turn-notify.log
+# 줄마다 [세션 앞 8자 모드]. 읽는 법:
+#   armed → sent        보통의 완료 (유휴 확인 후 발송)
+#   hold / (carried)    배경 작업이 끝날 때까지 보류, 그 작업이 깨운 턴이 가져감
+#   release             작업은 끝났는데 세션이 안 깨어나 watcher 가 발송
+#   skip: …             안 보낸 이유 (짧은 턴, 화면에 보임, 정보성 알림 등)
+#   watch done: …       watcher 종료 사유 — recap 교체가 안 됐을 때 여기서 원인을 본다
 ```
 
 ## 갱신 방법
