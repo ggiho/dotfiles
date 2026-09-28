@@ -26,16 +26,18 @@ if ! jq -e . "$SETTINGS" >/dev/null 2>&1; then
 fi
 
 tmp=$(mktemp)
+trap 'rm -f "$tmp"' EXIT
 jq \
   --arg start "$HOOK start" \
   --arg stop  "$HOOK stop" \
   --arg ask   "$HOOK ask" \
   --arg fail  "$HOOK fail" \
   --arg end   "$HOOK end" '
+  # present: bring its timeout/async up to date; absent: add it
   def ensure($event; $cmd; $extra):
     .hooks[$event] = ((.hooks[$event] // [])
       | if any(.[]; (.hooks // []) | any(.command == $cmd))
-        then .
+        then map(.hooks |= ((. // []) | map(if .command == $cmd then . + $extra else . end)))
         else . + [{hooks: [({type: "command", command: $cmd} + $extra)]}]
         end);
     ensure("UserPromptSubmit"; $start; {timeout: 5})
@@ -48,6 +50,6 @@ jq \
 if cmp -s "$tmp" "$SETTINGS"; then
   rm -f "$tmp"
 else
-  mv "$tmp" "$SETTINGS"
+  cat "$tmp" > "$SETTINGS"      # write through a symlinked settings.json, keep its mode
   echo "chezmoi: wired Claude notification hooks into $SETTINGS"
 fi

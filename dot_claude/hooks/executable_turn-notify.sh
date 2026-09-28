@@ -27,7 +27,7 @@
 #     released by the watcher after a grace period.
 #
 # Env knobs:
-#   CLAUDE_NOTIFY_MIN_SECONDS  don't announce turns shorter than this (default 30)
+#   CLAUDE_NOTIFY_MIN_SECONDS  don't announce requests shorter than this, timed from your prompt (default 30)
 #   CLAUDE_NOTIFY_SOUND        sound for "done"      (default Glass; empty for silent)
 #   CLAUDE_NOTIFY_ASK_SOUND    sound for "needs you" (default Ping;  empty for silent)
 #   CLAUDE_NOTIFY_PENDING_TTL  drop an armed notice older than this (default 900s)
@@ -63,10 +63,13 @@ fi
 session=$(printf '%s' "$session" | tr -c 'A-Za-z0-9._-' '_')
 
 # per-session state
-stamp="$STATE_DIR/$session"            # turn start epoch
+turns="$STATE_DIR/$session.t"          # one file per turn begun and not yet ended: .t.EPOCH.PID
+legacy_stamp="$STATE_DIR/$session"     # (the single start stamp this used to keep)
 pending="$STATE_DIR/$session.pending"  # armed notice: armed_at started dur status task
+                                       # (.pending.claimed.PID while one process decides on it)
 ctx="$STATE_DIR/$session.ctx"          # cwd transcript
 carry="$STATE_DIR/$session.carry"      # your prompt, held across woken turns: started task
+req="$STATE_DIR/$session.req"          # when you typed the request not yet announced: epoch
 held="$STATE_DIR/$session.held"        # parked for background work: armed_at
 sent="$STATE_DIR/$session.sent"        # delivered notice, for the recap swap
 mkdir -p "$STATE_DIR" 2>/dev/null
@@ -85,6 +88,57 @@ humanize() {
   if   [ "$s" -ge 3600 ]; then echo "$(( s / 3600 ))h $(( s % 3600 / 60 ))m"
   elif [ "$s" -ge 60 ];   then echo "$(( s / 60 ))m $(( s % 60 ))s"
   else echo "${s}s"; fi
+}
+
+# Turn starts are kept one file per turn. With a single stamp, a queued <task-notification>
+# could start the next turn (UserPromptSubmit is synchronous) before the previous turn's
+# asynchronous Stop hook read the stamp — and that Stop would take the new turn's start.
+turn_begin() {  # turn_begin new|cont — a prompt you typed forgets any unfinished turn
+  [ "$1" = new ] && rm -f "$turns".* 2>/dev/null
+  : > "$turns.$(date +%s).$$"
+}
+turn_take() {  # the start epoch of the turn this Stop ends, which it closes
+  # This turn is the newest one that did not begin in the last 2s: a start younger than
+  # that is the next turn, queued behind this one's asynchronous Stop. Anything older is
+  # a turn that never reached Stop — you interrupted it (Esc fires no Stop) — so forget it.
+  local now f e pick="" first=""
+  now=$(date +%s)
+  for f in $(/bin/ls -1 "$turns".* 2>/dev/null); do          # oldest first
+    e=${f#"$turns".}; e=${e%%.*}
+    [ -n "$first" ] || first=$f
+    [ "$e" -le $(( now - 2 )) ] && pick=$f
+  done
+  pick=${pick:-$first}                                       # a turn shorter than 2s
+  if [ -z "$pick" ]; then                                    # a turn begun before the upgrade
+    f=$(cat "$legacy_stamp" 2>/dev/null) && rm -f "$legacy_stamp" && [ -n "$f" ] && { echo "$f"; return 0; }
+    return 1
+  fi
+  for f in $(/bin/ls -1 "$turns".* 2>/dev/null); do [ "$f" \< "$pick" ] && rm -f "$f"; done
+  rm "$pick" 2>/dev/null || return 1                         # another Stop took it
+  e=${pick#"$turns".}; echo "${e%%.*}"
+}
+turn_since() {  # turn_since EPOCH — a turn began at or after EPOCH and has not ended
+  local f e
+  for f in $(/bin/ls -1 "$turns".* 2>/dev/null); do
+    e=${f#"$turns".}; e=${e%%.*}
+    [ "$e" -ge "$1" ] && return 0
+  done
+  return 1
+}
+
+# Hooks run as separate processes and overlap: two may act on one armed notice (the idle
+# signal and the watcher's fallback), or a new turn may begin while one is deciding. A
+# process first claims the notice with an atomic rename; whoever loses the rename backs off.
+claim() {
+  local c="$pending.claimed.$$"
+  mv "$pending" "$c" 2>/dev/null || return 1
+  printf '%s' "$c"
+}
+
+safe() {  # terminal-notifier reads its options through NSUserDefaults, which takes a value
+          # starting with "-" for an option and "(…)"/"{…}" for a plist, leaving the text
+          # empty. A zero-width space in front keeps it plain text.
+  case "$1" in -*|\(*|\{*|\<*|\"*) printf '\342\200\213%s' "$1" ;; *) printf '%s' "$1" ;; esac
 }
 
 # ------------------------------------------------------------ transcript reads
@@ -115,26 +169,30 @@ last_prompt() {  # what the turn was about: Claude Code's own last-prompt record
       | if (length > 64) then .[0:63] + "…" else . end' 2>/dev/null
 }
 
-running_agents() {  # background agents launched from this session that are still alive
-  local tp=$1 dir now id state
+running_agents() {  # background agents launched or resumed since EPOCH that are still alive
+  local tp=$1 since=${2:-0} dir now id state
   [ -f "$tp" ] || { echo 0; return; }
   dir="${tp%.jsonl}/subagents"; now=$(date +%s)
   scan "$tp" 'Async agent launched successfully' '"resumedAgentId"' '<task-notification>' |
   jq -r '
     def txt: if type == "string" then . elif type == "array" then map(.text? // "") | join("") else "" end;
-    select(.type == "user") | .message.content as $c
+    select(.type == "user")
+    | (try (((.timestamp // "")[:19] + "Z") | fromdateiso8601) catch 0) as $ts
+    | .message.content as $c
     | if ($c | type) == "string" then
         select($c | test("<status>"))
-        | (try ($c | capture("<task-id>(?<id>[A-Za-z0-9]+)</task-id>").id) catch empty) | "done \(.)"
+        | (try ($c | capture("<task-id>(?<id>[A-Za-z0-9]+)</task-id>").id) catch empty) | "done \(.) 0"
       elif ($c | type) == "array" then
         $c[] | select(.type? == "tool_result") | (.content | txt) as $t
         | if ($t | startswith("Async agent launched successfully")) then
-            (try ($t | capture("agentId: (?<id>[A-Za-z0-9]+)").id) catch empty) | "run \(.)"
+            (try ($t | capture("agentId: (?<id>[A-Za-z0-9]+)").id) catch empty) | "run \(.) \($ts)"
           elif ($t | startswith("{\"success\":true")) then
-            (try ($t | capture("\"resumedAgentId\":\"(?<id>[A-Za-z0-9]+)\"").id) catch empty) | "run \(.)"
+            (try ($t | capture("\"resumedAgentId\":\"(?<id>[A-Za-z0-9]+)\"").id) catch empty) | "run \(.) \($ts)"
           else empty end
       else empty end' 2>/dev/null |
-  awk '{ last[$2] = $1 } END { for (id in last) if (last[id] == "run") print id }' |
+  # like commands, only agents launched (or resumed) since your prompt hold its notice
+  awk -v since="$since" '{ last[$2] = $1; at[$2] = $3 }
+       END { for (id in last) if (last[id] == "run" && at[id] >= since) print id }' |
   while read -r id; do
     # The launch/report bookkeeping alone is not enough: 56 of 93 agents in one session
     # finished without a <task-notification> (their result reached the parent another
@@ -145,10 +203,12 @@ running_agents() {  # background agents launched from this session that are stil
     f="$dir/agent-$id.jsonl"
     [ -f "$f" ] || continue
     [ $(( now - $(stat -f %m "$f" 2>/dev/null || echo 0) )) -le "$BG_STALE" ] || continue
-    state=$(tail -n 60 "$f" 2>/dev/null | jq -r 'select(.type == "assistant" or .type == "user")
+    state=$(tail -n 200 "$f" 2>/dev/null | jq -r 'select(.type == "assistant" or .type == "user")
       | if .type == "assistant" and (.message.stop_reason == "end_turn" or .message.stop_reason == "stop_sequence")
         then "finished" else "running" end' 2>/dev/null | tail -1)
-    [ "$state" = running ] && echo "$id"
+    # unreadable (all hook attachments in the window) counts as running; the staleness
+    # bound above still releases it
+    [ "$state" != finished ] && echo "$id"
   done | wc -l | tr -d ' '
 }
 
@@ -218,7 +278,7 @@ running_tasks() {  # background commands and Monitors started since EPOCH, still
 
 in_flight() {  # in_flight TRANSCRIPT SINCE — "N agent(s), M task(s)" when anything runs
   local a t
-  a=$(running_agents "$1"); t=$(running_tasks "$1" "$2")
+  a=$(running_agents "$1" "$2"); t=$(running_tasks "$1" "$2")
   [ "$(( ${a:-0} + ${t:-0} ))" -gt 0 ] && echo "${a:-0} agent(s), ${t:-0} command/monitor(s)"
 }
 
@@ -227,7 +287,9 @@ pending_request() {  # what Claude is waiting on: "KIND<TAB>TEXT" from the unans
   # question, a plan, and a shell command alike. The transcript already holds the call.
   local tp=$1
   [ -f "$tp" ] || return 0
-  tail -c 2000000 "$tp" 2>/dev/null | tail -n +2 | jq -rs '
+  # jq -s needs whole records: drop the first line only when tail -c cut into one
+  { if [ "$(stat -f %z "$tp" 2>/dev/null || echo 0)" -gt 2000000 ]; then
+      tail -c 2000000 "$tp" | tail -n +2; else cat "$tp"; fi; } 2>/dev/null | jq -rs '
     def cut(n): gsub("\\s+"; " ") | if length > n then .[0:n-1] + "…" else . end;
     ([.[] | select(.type == "user") | .message.content | arrays | .[]
        | select(.type? == "tool_result") | .tool_use_id]) as $done
@@ -254,19 +316,21 @@ recap_since() {  # the away_summary Claude Code wrote after EPOCH, if any
       | if (length > 200) then .[0:199] + "…" else . end' 2>/dev/null
 }
 
-park() {  # park ARMED_AT STARTED TASK WHY — hold the notice until background work ends
+park() {  # park CLAIM STARTED TASK WHY — hold a claimed notice until background work ends
+  local a; a=$(cut -f1 "$1" 2>/dev/null); rm -f "$1"
+  # checking took seconds: a turn that began since this notice was armed owns the session
+  if turn_since "${a:-0}"; then log "drop: a new turn began while checking"; return; fi
   [ -f "$carry" ] || printf '%s\t%s\n' "$2" "$3" > "$carry"
-  printf '%s\n' "$1" > "$held"
-  rm -f "$pending"
+  printf '%s\n' "$a" > "$held"
   log "hold: $4"
 }
 
-deliver_now() {  # hand the notice to ask mode as if Claude Code had reported idle
+deliver_now() {  # deliver_now CLAIM [RECAP] — hand a claimed notice to ask mode
   # decided: ask mode must not second-guess it — a release after BG_MAX_HOLD would be
   # parked again with nothing left to release it
   jq -n --arg s "$session" --arg c "$(cut -f1 "$ctx" 2>/dev/null)" --arg t "$tp" \
-        --arg r "${1:-}" --arg m "$IDLE_MSG" \
-    '{session_id:$s, cwd:$c, transcript_path:$t, message:$m, decided:true}
+        --arg k "$1" --arg r "${2:-}" --arg m "$IDLE_MSG" \
+    '{session_id:$s, cwd:$c, transcript_path:$t, message:$m, decided:true, claim:$k}
      + (if $r != "" then {recap:$r} else {} end)' |
     "$0" ask
 }
@@ -274,19 +338,21 @@ deliver_now() {  # hand the notice to ask mode as if Claude Code had reported id
 # ---------------------------------------------------------------- lifecycle
 case "$mode" in
   start)
-    date +%s > "$stamp"
     prompt=$(field '.prompt // .message')
+    # Background work reporting back continues your request; anything you typed starts new
+    # work. Only a leading tag counts — a prompt that merely quotes one (a pasted log) is yours.
+    lead=${prompt#"${prompt%%[![:space:]]*}"}
+    case "$lead" in "<task-notification>"*) cont=1 ;; *) cont=0 ;; esac
+    if [ "$cont" = 1 ]; then turn_begin cont; else turn_begin new; date +%s > "$req"; fi
+    rm -f "$legacy_stamp"
     if [ -f "$pending" ]; then
       rm -f "$pending"
-      case "$prompt" in
-        *"<task-notification>"*) log "disarmed (background task reported back)" ;;
-        *)                       log "disarmed (new prompt)" ;;
-      esac
+      if [ "$cont" = 1 ]; then log "disarmed (background task reported back)"
+      else log "disarmed (new prompt)"; fi
     fi
     # a new turn takes over whatever was parked or waiting for its recap
     rm -f "$sent" "$held"
-    # a prompt you typed starts new work; background work reporting back continues the old
-    case "$prompt" in *"<task-notification>"*) ;; *) rm -f "$carry" ;; esac
+    [ "$cont" = 1 ] || rm -f "$carry"
     exit 0 ;;
 
   probe)
@@ -299,14 +365,18 @@ case "$mode" in
     # that never happened. Watchers find their state gone and quit on their next check.
     had=""
     for f in "$pending" "$held" "$carry"; do [ -f "$f" ] && had="$had ${f##*.}"; done
-    rm -f "$stamp" "$pending" "$held" "$carry" "$sent" "$ctx"
+    rm -f "$turns".* "$legacy_stamp" "$pending" "$held" "$carry" "$sent" "$ctx" "$req"
     [ -n "$had" ] && log "session ended ($(field .reason)): dropped$had"
     exit 0 ;;
 
   stop|fail)
-    started=$(cat "$stamp" 2>/dev/null || true)
-    rm -f "$stamp"
-    [ -n "$started" ] || { log "skip: no stamp (clear/compact/resume)"; exit 0; }
+    started=$(turn_take) || { log "skip: no stamp (clear/compact/resume)"; exit 0; }
+    # Time your request, not this turn. Claude often launches background work and ends
+    # the turn in seconds, then reports in another short turn when woken: judged turn by
+    # turn, a ten-minute request never reached MIN_SECONDS. Once announced the request is
+    # closed, so a stray late wake-up (a Monitor expiring hours later) is judged on its own.
+    r=$(cat "$req" 2>/dev/null || true)
+    [ -n "$r" ] && [ "$r" -le "$started" ] && started=$r
     tp=$(transcript)
     task=""
     # a turn woken by background work continues your request: time it from your prompt
@@ -321,8 +391,14 @@ case "$mode" in
     printf '%s\t%s\t%s\t%s\t%s\n' "$armed_at" "$started" "$(humanize "$elapsed")" "$status" "$task" > "$pending"
     printf '%s\t%s\n' "$(field .cwd)" "$tp" > "$ctx"
     log "armed[$status]: $(humanize "$elapsed")$([ -f "$carry" ] && echo ' (carried)')"
-    /usr/bin/perl -MPOSIX -e 'setsid; exec @ARGV' "$0" watch "$session" "$armed_at" \
-      </dev/null >/dev/null 2>&1 &
+    # the watcher must outlive this hook: setsid takes it out of the hook's process group
+    if [ -x /usr/bin/perl ]; then
+      /usr/bin/perl -MPOSIX -e 'setsid; exec @ARGV' "$0" watch "$session" "$armed_at" \
+        </dev/null >/dev/null 2>&1 &
+    else
+      log "no /usr/bin/perl: watcher started without setsid"
+      nohup "$0" watch "$session" "$armed_at" </dev/null >/dev/null 2>&1 &
+    fi
     exit 0 ;;
 
   watch)
@@ -339,34 +415,50 @@ case "$mode" in
       if [ -f "$pending" ]; then
         # armed, idle signal not yet in. Stay until it resolves — if ask mode parks the
         # notice, this watcher is what re-checks it — and meanwhile try the recap fallback.
-        [ "$(cut -f1 "$pending")" = "$armed_at" ] || quit "a newer turn took over"
+        a=$(cut -f1 "$pending" 2>/dev/null)
+        [ -n "$a" ] || { sleep 1; continue; }                  # changing under us: look again
+        [ "$a" = "$armed_at" ] || quit "a newer turn took over"
         [ $(( now - armed_at )) -le "$PENDING_TTL" ] || quit "armed notice expired unconfirmed"
         sleep 5
+        [ "$(cut -f1 "$pending" 2>/dev/null)" = "$armed_at" ] || continue   # re-check after sleep
         [ "$RECAP" != 0 ] && [ "$now" -lt "$recap_until" ] || continue
         r=$(recap_since "$tp" "$armed_at")
         [ -n "$r" ] || continue
-        [ -f "$pending" ] || continue
-        IFS=$'\t' read -r _ started _ _ task < "$pending"
+        c=$(claim) || continue
+        if [ "$(cut -f1 "$c")" != "$armed_at" ]; then mv -n "$c" "$pending" 2>/dev/null; continue; fi
+        IFS=$'\t' read -r _ started _ _ task < "$c"
         busy=$(in_flight "$tp" "$started")
-        if [ -n "$busy" ]; then park "$armed_at" "$started" "$task" "$busy (no idle signal)"; continue; fi
+        if [ -n "$busy" ]; then park "$c" "$started" "$task" "$busy (no idle signal)"; continue; fi
         log "idle signal missing; recap arrived"
-        deliver_now "$r"; quit "delivered the recap (no idle signal)"
+        deliver_now "$c" "$r"; quit "delivered the recap (no idle signal)"
+
+      elif /bin/ls "$pending".claimed.* >/dev/null 2>&1; then
+        # another process is deciding on the notice (a few seconds); see what it leaves.
+        # A claim older than a minute belongs to a process that died.
+        c=$(/bin/ls -1 "$pending".claimed.* 2>/dev/null | head -1)
+        [ $(( now - $(stat -f %m "$c" 2>/dev/null || echo 0) )) -lt 60 ] || quit "a claim on the notice was abandoned"
+        sleep 1
 
       elif [ -f "$sent" ]; then
         # delivered: swap in the recap while the notice is still in Notification Center
         IFS=$'\t' read -r s_at group title subtitle jump < "$sent"
         [ "$s_at" = "$armed_at" ] || quit "a newer notice was sent"
-        [ "$RECAP" != 0 ] && [ "$now" -lt "$recap_until" ] || { rm -f "$sent"; quit "no recap within 6 min"; }
+        [ "$RECAP" != 0 ] && [ "$now" -lt "$recap_until" ] || quit "no recap within 6 min"
         sleep 5
         r=$(recap_since "$tp" "$armed_at")
         [ -n "$r" ] || continue
-        rm -f "$sent"
+        # the rename is the claim: a new turn (start mode drops $sent) or a newer notice wins
+        mv "$sent" "$sent.claimed.$$" 2>/dev/null || quit "notice taken over by a new turn"
+        if [ "$(cut -f1 "$sent.claimed.$$")" != "$armed_at" ]; then
+          mv -n "$sent.claimed.$$" "$sent" 2>/dev/null; quit "a newer notice was sent"
+        fi
+        rm -f "$sent.claimed.$$"
         [ "$DRY_RUN" = 1 ] && quit "recap swapped in (dry-run): $r"
         # clicked or dismissed means you have seen it; re-posting would pop it back up
         terminal-notifier -list "$group" 2>/dev/null | tail -n +2 | grep -q . ||
           quit "recap ready but notice already dismissed"
-        args=(-title "$title" -message "$r" -group "$group")
-        [ -n "$subtitle" ] && args+=(-subtitle "$subtitle")
+        args=(-title "$title" -message "$(safe "$r")" -group "$group")
+        [ -n "$subtitle" ] && args+=(-subtitle "$(safe "$subtitle")")
         [ -n "$jump" ] && args+=(-execute "$jump")
         terminal-notifier "${args[@]}" >/dev/null 2>&1 && quit "recap swapped in: $r"
         quit "recap swap failed"
@@ -388,16 +480,21 @@ case "$mode" in
           [ $(( now - zero_since )) -ge "$HOLD_GRACE" ] || continue
           reason="background work ended without waking the session"
         fi
-        rm -f "$held"
-        printf '%s\t%s\t%s\t%s\t%s\n' "$now" "$started" "$(humanize $(( now - started )))" done "$task" > "$pending"
+        rm "$held" 2>/dev/null || quit "parked notice taken over by a new turn"
+        c="$pending.claimed.$$"
+        printf '%s\t%s\t%s\t%s\t%s\n' "$now" "$started" "$(humanize $(( now - started )))" done "$task" > "$c"
         log "release: $reason"
-        deliver_now "$(recap_since "$tp" "$armed_at")"; quit "released the parked notice"
+        deliver_now "$c" "$(recap_since "$tp" "$armed_at")"; quit "released the parked notice"
 
       else
         quit "nothing left to do (disarmed or suppressed)"
       fi
     done ;;
 esac
+
+announced() {  # a completion you were shown (or were looking at) closes the request
+  case "${kind:-}" in done|failed) rm -f "$req" ;; esac
+}
 
 # ------------------------------------------------------------------ ask mode
 message=$(field .message)
@@ -418,15 +515,23 @@ esac
 
 if [ "$ntype" = idle_prompt ]; then
   # Claude Code reports the main loop idle — deliver, unless work is still in flight
-  [ -f "$pending" ] || { log "skip: idle but nothing armed"; exit 0; }
-  IFS=$'\t' read -r armed_at started dur status task < "$pending"
+  if [ "$(field .decided)" = true ]; then
+    c=$(field .claim)                        # the watcher claimed it and has decided
+    [ -f "$c" ] || { log "skip: the decided notice vanished"; exit 0; }
+  else
+    c=$(claim) || { log "skip: idle but nothing armed"; exit 0; }
+  fi
+  IFS=$'\t' read -r armed_at started dur status task < "$c"
   age=$(( $(date +%s) - ${armed_at:-0} ))
-  [ "$age" -le "$PENDING_TTL" ] || { rm -f "$pending"; log "skip: armed notice stale (${age}s)"; exit 0; }
+  [ "$age" -le "$PENDING_TTL" ] || { rm -f "$c"; log "skip: armed notice stale (${age}s)"; exit 0; }
   if [ "$(field .decided)" != true ]; then
     busy=$(in_flight "$(transcript)" "${started:-$armed_at}")
-    if [ -n "$busy" ]; then park "$armed_at" "$started" "$task" "$busy still running"; exit 0; fi
+    if [ -n "$busy" ]; then park "$c" "$started" "$task" "$busy still running"; exit 0; fi
   fi
-  rm -f "$pending" "$carry"
+  rm -f "$c"
+  # checking took seconds: if a turn began since this notice was armed, it is stale
+  if turn_since "${armed_at:-0}"; then log "drop: a new turn began while checking"; exit 0; fi
+  rm -f "$carry"
   [ "${status:-done}" = failed ] && kind=failed || kind=done
   body="${recap:-$task}"
   if [ "$kind" = failed ]; then SOUND="${CLAUDE_NOTIFY_ASK_SOUND-Ping}"
@@ -477,7 +582,11 @@ if [ -n "${TMUX_PANE:-}" ] && command -v tmux >/dev/null 2>&1; then
     if [ "$win_active" = 1 ] && { [ "$pane_active" = 1 ] || [ "${zoomed:-0}" != 1 ]; }; then
       onscreen=1
     fi
-    clients=$(tmux list-clients -t "$sess" -F '#{client_pid}' 2>/dev/null || true)
+    # Only a focused client counts. WezTerm is frontmost whichever of its tabs you are in,
+    # so a tmux client in a background tab would otherwise pass as "on screen" and the
+    # notice would vanish. tmux tracks focus from the terminal (focus-events on).
+    clients=$(tmux list-clients -t "$sess" -F '#{client_pid} #{client_flags}' 2>/dev/null |
+              awk '$2 ~ /(^|,)focused(,|$)/ {print $1}')
     front=$(lsappinfo info -only pid "$(lsappinfo front 2>/dev/null)" 2>/dev/null |
             sed -n 's/.*"pid"=\([0-9]\{1,\}\).*/\1/p')
     log "gate2 $subtitle win_active=$win_active pane_active=$pane_active zoomed=${zoomed:-?} onscreen=$onscreen clients=[$(printf '%s' "$clients" | tr '\n' ',')] front=${front:-NONE}"
@@ -486,12 +595,14 @@ if [ -n "${TMUX_PANE:-}" ] && command -v tmux >/dev/null 2>&1; then
         [ -n "$cpid" ] || continue
         p=$cpid
         while [ -n "$p" ] && [ "$p" != 0 ] && [ "$p" != 1 ]; do
-          [ "$p" = "$front" ] && { log "skip: $subtitle is on screen"; exit 0; }
+          [ "$p" = "$front" ] && { log "skip: $subtitle is on screen"; announced; exit 0; }
           p=$(ps -o ppid= -p "$p" 2>/dev/null | tr -d ' ')
         done
       done <<<"$clients"
     fi
 
+    # unquoted on purpose: terminal-notifier does not run -execute through a shell that
+    # honours quotes (a quoted path never ran). So $HOME must not contain spaces.
     jump="$HOME/.claude/hooks/tmux-jump.sh $TMUX_PANE"
   fi
 fi
@@ -502,7 +613,7 @@ if [ -z "$subtitle" ]; then
           sed -n 's/.*"pid"=\([0-9]\{1,\}\).*/\1/p')
   p=$PPID
   while [ -n "$front" ] && [ -n "$p" ] && [ "$p" != 0 ] && [ "$p" != 1 ]; do
-    [ "$p" = "$front" ] && { log "skip: the app hosting this session is frontmost"; exit 0; }
+    [ "$p" = "$front" ] && { log "skip: the app hosting this session is frontmost"; announced; exit 0; }
     p=$(ps -o ppid= -p "$p" 2>/dev/null | tr -d ' ')
   done
 fi
@@ -532,6 +643,7 @@ notify_osascript() {
   osascript -e "$s" >/dev/null 2>&1 || true
 }
 
+announced
 if [ "$DRY_RUN" = 1 ]; then
   log "sent[$kind] (dry-run): $subtitle | $body"
   if [ "$kind" = done ] || [ "$kind" = failed ]; then
@@ -539,8 +651,8 @@ if [ "$DRY_RUN" = 1 ]; then
       printf '%s\t%s\t%s\t%s\t%s\n' "$armed_at" "$group" "$title" "$subtitle" "$jump" > "$sent"
   fi
 elif command -v terminal-notifier >/dev/null 2>&1; then
-  args=(-title "$title" -message "$body" -group "$group")
-  [ -n "$subtitle" ] && args+=(-subtitle "$subtitle")
+  args=(-title "$title" -message "$(safe "$body")" -group "$group")
+  [ -n "$subtitle" ] && args+=(-subtitle "$(safe "$subtitle")")
   [ -n "$SOUND" ] && args+=(-sound "$SOUND")
   [ -n "$jump" ] && args+=(-execute "$jump")
   if terminal-notifier "${args[@]}" >/dev/null 2>&1; then
