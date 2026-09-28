@@ -25,6 +25,9 @@ Library/Preferences/org.pqrs.Karabiner-Updater.plist
 # (다른 PC에서는 ~/.config/mysql/hosts 만 수동으로 넣으면 `db` 동작)
 .config/mysql/hosts
 
+# --- rsync 대상 목록: 내부 IP·계정이라 공개 repo 제외 (justfile 의 rsync-push/-pull 이 읽음)
+.config/rsync/targets
+
 # --- justfile: PROD 인프라 레시피는 로컬 전용 (공개 repo에 내부 호스트명 노출 방지)
 .config/justfile/prod.just
 

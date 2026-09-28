@@ -25,6 +25,7 @@ kanata는 권한 관련 증상·트러블슈팅이 길어서 별도 문서에 �
 | `~/.claude/settings.json` | LLM 게이트웨이 URL, `apiKeyHelper` 경로, 모델 지정 | 수동 작성. **알림 hook 3개는 `run_onchange_after_claude-notify-hooks.sh`가 자동 병합**하므로 `env`·`model`·`apiKeyHelper`만 채우면 된다 |
 | `~/.local/bin/asurion-llm-gateway/api-key-helper` | 6.4MB 사내 바이너리 | 사내 배포처에서 받기 (chezmoi 미관리) |
 | `~/.config/mysql/hosts` | DB 서버 목록·계정 | 수동 배치. 이 파일만 넣으면 `db` / `dbq` 동작 |
+| `~/.config/rsync/targets` | `rsync-push`/`rsync-pull` 대상 목록 (내부 IP·계정) | 수동 배치. 형식 `표시명:user@host:key:remote_dir`. 없어도 `~/.ssh/config` 호스트와 `[직접 입력]`은 동작하고, 직접 입력 때 저장하면 이 파일이 생긴다 |
 | `~/.config/justfile/prod.just` | PROD 인프라 레시피 (내부 호스트명) | 로컬 전용 |
 | `~/.soluto_dm.env` | 자격증명 | 수동 |
 | `~/.config/{redshift,gh,gcloud,mycli,opencode}/` | 각 도구 인증 토큰 | 각 도구로 재로그인 (`gh auth login`, `gcloud auth login` 등) |

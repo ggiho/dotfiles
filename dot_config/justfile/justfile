@@ -33,6 +33,7 @@
 
 # ── Path variables ────────────────────────────────────────────────────────────
 HOSTS_FILE      := "$HOME/.config/mysql/hosts"
+RSYNC_TARGETS   := "$HOME/.config/rsync/targets"
 SANITIZE_SCRIPT := "$HOME/.config/mysql/sanitize_users.py"
 DDB_SCRIPT_DIR  := env_var_or_default("DDB_SCRIPT_DIR", env_var("HOME") + "/10_Database/AWS/dynamodb")
 DMSCTL_ROOT     := env_var_or_default("DMSCTL_ROOT", env_var("HOME") + "/src/github.com/ggiho/dmsctl")
@@ -2542,3 +2543,133 @@ docker-rmi:
   [ -z "$selected" ] && exit 0
   echo "$selected" | xargs docker rmi
   echo "removed"
+
+# ── rsync (scp 대체) ──────────────────────────────────────────────────────────
+# 대상은 ~/.config/rsync/targets 에서 고른다 (로컬 전용 -- 내부 IP 라 공개 repo 에 없다).
+# 형식: 표시명:user@host:key:remote_dir   (key·remote_dir 는 비워도 된다)
+# ~/.ssh/config 의 Host 도 목록에 붙고, [직접 입력] 으로 즉석 호스트도 된다.
+#
+# scp 대신 rsync 인 이유: 끊겨도 --partial 로 이어받고, 같은 파일은 다시 안 보낸다.
+# 원격에 rsync 가 없으면(최소 AMI 등) scp 로 폴백한다.
+# macOS 기본 rsync 는 openrsync 라 --info=progress2 가 없어서 -P 를 쓴다.
+
+# hint: remote_dir: 원격 목적지 디렉터리 (빈값 = 대상의 기본값, 그것도 없으면 ~)
+
+[group('ssh')]
+rsync-push remote_dir="": (_rsync-impl "push" remote_dir)
+
+# hint: local_dir: 받을 로컬 디렉터리 (default: 현재 디렉터리)
+
+[group('ssh')]
+rsync-pull local_dir=".": (_rsync-impl "pull" local_dir)
+
+# Private (leading _): hidden from `just --list`. direction 이 push 면 dir 은 원격
+# 목적지, pull 이면 로컬 목적지다.
+_rsync-impl direction dir:
+  #!/usr/bin/env bash
+  set -euo pipefail
+  TARGETS_FILE="{{RSYNC_TARGETS}}"
+  manual_marker="[직접 입력]"
+
+  # 후보: 탭 구분 "표시 | user@host | key | remote_dir". fzf 에는 앞 두 칸만 보인다.
+  candidates=$(
+    {
+      echo "$manual_marker"
+      if [ -f "$TARGETS_FILE" ]; then
+        grep -vE '^[[:space:]]*(#|$)' "$TARGETS_FILE" | \
+          awk -F: '{ printf "%s\t%s\t%s\t%s\n", $1, $2, $3, $4 }'
+      fi
+      # ~/.ssh/config 의 Host 는 user/key 를 ssh 가 알아서 채운다. 와일드카드는 제외.
+      if [ -f "$HOME/.ssh/config" ]; then
+        awk 'tolower($1) == "host" { for (i = 2; i <= NF; i++) if ($i !~ /[*?]/) print $i }' \
+          "$HOME/.ssh/config" | awk '{ printf "%s (ssh config)\t%s\t\t\n", $1, $1 }'
+      fi
+    }
+  )
+  picked=$(printf '%s\n' "$candidates" | \
+    fzf --prompt="{{direction}} target> " --height=40% --scheme=default \
+        --delimiter=$'\t' --with-nth=1,2)
+  [ -z "$picked" ] && exit 0
+
+  if [ "$picked" = "$manual_marker" ]; then
+    read -rp "user@host: " dest
+    [ -z "$dest" ] && exit 0
+    no_key="(ssh 기본 키)"
+    key=$( { echo "$no_key"; for f in "$HOME"/.ssh/*; do
+        [ -f "$f" ] && head -1 "$f" 2>/dev/null | grep -q 'PRIVATE KEY' && echo "$f"
+      done; } | fzf --prompt="key> " --height=40% --scheme=default)
+    [ -z "$key" ] && exit 0
+    [ "$key" = "$no_key" ] && key=""
+    read -rp "기본 원격 디렉터리 [~]: " target_dir
+    read -rp "targets 에 저장할 이름 (빈값 = 저장 안 함): " save_as
+    # 치환 문자열의 ~ 는 \~ 로 막아야 한다 -- 그냥 ~ 면 bash 가 다시 $HOME 으로 펼친다.
+    if [ -n "$save_as" ]; then
+      mkdir -p "$(dirname "$TARGETS_FILE")"
+      printf '%s:%s:%s:%s\n' "$save_as" "$dest" "${key/#"$HOME"/\~}" "$target_dir" >> "$TARGETS_FILE"
+      echo "Saved to $TARGETS_FILE"
+    fi
+  else
+    # IFS=$'\t' read 는 쓰면 안 된다: 탭은 IFS 공백 문자라 연속 탭이 하나로 합쳐져
+    # 빈 key 칸이 사라지고 remote_dir 이 key 자리로 당겨진다 (ssh config 호스트는
+    # key 가 항상 비어 있다). cut 은 빈 칸을 그대로 센다.
+    dest=$(printf '%s' "$picked" | cut -f2)
+    key=$(printf '%s' "$picked" | cut -f3)
+    target_dir=$(printf '%s' "$picked" | cut -f4)
+  fi
+  key="${key/#\~/$HOME}"
+  target_dir="${target_dir:-~}"
+  if [ -n "$key" ] && [ ! -f "$key" ]; then
+    echo "키 파일 없음: $key" >&2
+    exit 1
+  fi
+
+  ssh_opts=(-o ConnectTimeout=10 -o StrictHostKeyChecking=accept-new)
+  [ -n "$key" ] && ssh_opts+=(-i "$key" -o IdentitiesOnly=yes)
+
+  # 접속 확인과 원격 rsync 유무를 한 번에 본다. ssh 자체 실패는 255 로 끝난다.
+  probe=$(ssh "${ssh_opts[@]}" "$dest" 'command -v rsync >/dev/null && echo HAS_RSYNC || echo NO_RSYNC') || {
+    echo "접속 실패: $dest" >&2
+    exit 1
+  }
+  use_rsync=true
+  if [ "$probe" != "HAS_RSYNC" ]; then
+    use_rsync=false
+    echo ">> 원격에 rsync 가 없어 scp 로 보냅니다 (이어받기·중복 건너뛰기 없음)."
+  fi
+  rsh="ssh ${ssh_opts[*]}"
+
+  if [ "{{direction}}" = "push" ]; then
+    remote_dir="{{dir}}"
+    remote_dir="${remote_dir:-$target_dir}"
+    # 디렉터리도 고를 수 있다 -- rsync -a 가 재귀로 보낸다.
+    mapfile -t files < <(find . -mindepth 1 -maxdepth 3 \
+        -not -path '*/.git/*' -not -name .git -not -name .DS_Store \( -type f -o -type d \) | \
+      sed 's|^\./||' | sort | \
+      fzf --multi --prompt="push files (Tab=multi)> " --height=60% --scheme=path | grep .)
+    [ "${#files[@]}" -gt 0 ] || { echo "No files selected" >&2; exit 0; }
+    echo ">> ${#files[@]} 개 -> $dest:$remote_dir/"
+    if [ "$use_rsync" = true ]; then
+      rsync -avzP -e "$rsh" "${files[@]}" "$dest:$remote_dir/"
+    else
+      scp -r "${ssh_opts[@]}" "${files[@]}" "$dest:$remote_dir/"
+    fi
+  else
+    local_dir="{{dir}}"
+    mkdir -p "$local_dir"
+    # 원격 목록은 원격 셸에서 find 를 돌려 얻는다. ~ 는 원격 셸이 펼친다.
+    mapfile -t files < <(ssh "${ssh_opts[@]}" "$dest" \
+        "find $target_dir -maxdepth 2 -type f -not -path '*/.*' 2>/dev/null | sort | head -5000" | \
+      fzf --multi --prompt="pull files (Tab=multi)> " --height=60% --scheme=path | grep .)
+    [ "${#files[@]}" -gt 0 ] || { echo "No files selected" >&2; exit 0; }
+    echo ">> ${#files[@]} 개 <- $dest (-> $local_dir/)"
+    # 파일마다 한 번씩: 원격 소스 여러 개를 한 호출에 넘기는 문법은 rsync 구현마다
+    # 달라서(openrsync 포함) 루프가 가장 확실하다.
+    for f in "${files[@]}"; do
+      if [ "$use_rsync" = true ]; then
+        rsync -avzP -e "$rsh" "$dest:$f" "$local_dir/"
+      else
+        scp "${ssh_opts[@]}" "$dest:$f" "$local_dir/"
+      fi
+    done
+  fi
+  echo "Done."
