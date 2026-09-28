@@ -291,6 +291,10 @@ case "$mode" in
 
   watch)
     armed_at="${3:-0}"
+    # one line per watcher on the way out, so a watcher that never acted can be told
+    # apart from one that was killed (a missed recap swap, 2026-09-28, was undiagnosable)
+    quit() { log "watch done: $1"; exit 0; }
+    for sig in HUP INT TERM; do trap "log 'watch killed by SIG$sig'; exit 1" "$sig"; done
     tp=$(transcript)
     recap_until=$(( $(date +%s) + 360 ))    # the recap lands at ~189s (p90 199s)
     zero_since=""
@@ -299,8 +303,8 @@ case "$mode" in
       if [ -f "$pending" ]; then
         # armed, idle signal not yet in. Stay until it resolves — if ask mode parks the
         # notice, this watcher is what re-checks it — and meanwhile try the recap fallback.
-        [ "$(cut -f1 "$pending")" = "$armed_at" ] || exit 0         # a newer turn took over
-        [ $(( now - armed_at )) -le "$PENDING_TTL" ] || exit 0
+        [ "$(cut -f1 "$pending")" = "$armed_at" ] || quit "a newer turn took over"
+        [ $(( now - armed_at )) -le "$PENDING_TTL" ] || quit "armed notice expired unconfirmed"
         sleep 5
         [ "$RECAP" != 0 ] && [ "$now" -lt "$recap_until" ] || continue
         r=$(recap_since "$tp" "$armed_at")
@@ -310,33 +314,33 @@ case "$mode" in
         busy=$(in_flight "$tp" "$started")
         if [ -n "$busy" ]; then park "$armed_at" "$started" "$task" "$busy (no idle signal)"; continue; fi
         log "idle signal missing; recap arrived"
-        deliver_now "$r"; exit 0
+        deliver_now "$r"; quit "delivered the recap (no idle signal)"
 
       elif [ -f "$sent" ]; then
         # delivered: swap in the recap while the notice is still in Notification Center
         IFS=$'\t' read -r s_at group title subtitle jump < "$sent"
-        [ "$s_at" = "$armed_at" ] || exit 0
-        [ "$RECAP" != 0 ] && [ "$now" -lt "$recap_until" ] || { rm -f "$sent"; exit 0; }
+        [ "$s_at" = "$armed_at" ] || quit "a newer notice was sent"
+        [ "$RECAP" != 0 ] && [ "$now" -lt "$recap_until" ] || { rm -f "$sent"; quit "no recap within 6 min"; }
         sleep 5
         r=$(recap_since "$tp" "$armed_at")
         [ -n "$r" ] || continue
         rm -f "$sent"
         # clicked or dismissed means you have seen it; re-posting would pop it back up
         terminal-notifier -list "$group" 2>/dev/null | tail -n +2 | grep -q . ||
-          { log "recap ready but notice already dismissed"; exit 0; }
+          quit "recap ready but notice already dismissed"
         args=(-title "$title" -message "$r" -group "$group")
         [ -n "$subtitle" ] && args+=(-subtitle "$subtitle")
         [ -n "$jump" ] && args+=(-execute "$jump")
-        terminal-notifier "${args[@]}" >/dev/null 2>&1 && log "recap swapped in: $r"
-        exit 0
+        terminal-notifier "${args[@]}" >/dev/null 2>&1 && quit "recap swapped in: $r"
+        quit "recap swap failed"
 
       elif [ "$(cat "$held" 2>/dev/null)" = "$armed_at" ]; then
         # parked. Normally the turn that background work wakes takes over (start mode
         # drops $held). Release it here only when the work has ended and the session
         # stayed asleep for a grace period — a dead agent — or the wait ran too long.
         sleep "$HOLD_TICK"
-        [ "$(cat "$held" 2>/dev/null)" = "$armed_at" ] || exit 0
-        IFS=$'\t' read -r started task < "$carry" 2>/dev/null || exit 0
+        [ "$(cat "$held" 2>/dev/null)" = "$armed_at" ] || quit "parked notice taken over by a new turn"
+        IFS=$'\t' read -r started task < "$carry" 2>/dev/null || quit "parked notice lost its prompt"
         now=$(date +%s)
         if [ $(( now - started )) -ge "$BG_MAX_HOLD" ]; then
           reason="waited $(humanize $(( now - started ))) for background work"
@@ -350,10 +354,10 @@ case "$mode" in
         rm -f "$held"
         printf '%s\t%s\t%s\t%s\t%s\n' "$now" "$started" "$(humanize $(( now - started )))" done "$task" > "$pending"
         log "release: $reason"
-        deliver_now "$(recap_since "$tp" "$armed_at")"; exit 0
+        deliver_now "$(recap_since "$tp" "$armed_at")"; quit "released the parked notice"
 
       else
-        exit 0                        # disarmed or suppressed
+        quit "nothing left to do (disarmed or suppressed)"
       fi
     done ;;
 esac
