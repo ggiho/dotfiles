@@ -34,6 +34,8 @@
 #   CLAUDE_NOTIFY_BG_MAX_HOLD  stop waiting for background work after this long (default 7200s)
 #   CLAUDE_NOTIFY_RECAP        0 disables the recap swap and fallback (default 1)
 #   CLAUDE_NOTIFY_LOG          log path (default ~/.claude/hooks/turn-notify.log)
+#   CLAUDE_NOTIFY_DRY_RUN      1 logs every decision but posts nothing — use it for tests,
+#                              which otherwise put their notices on the real screen
 #   CLAUDE_NOTIFY_HOLD_TICK / CLAUDE_NOTIFY_HOLD_GRACE   watcher cadence (default 30s / 90s)
 
 set -u
@@ -47,6 +49,7 @@ HOLD_TICK="${CLAUDE_NOTIFY_HOLD_TICK:-30}"
 HOLD_GRACE="${CLAUDE_NOTIFY_HOLD_GRACE:-90}"
 STATE_DIR="${TMPDIR:-/tmp}/claude-turn-notify"
 LOG="${CLAUDE_NOTIFY_LOG:-$HOME/.claude/hooks/turn-notify.log}"
+DRY_RUN="${CLAUDE_NOTIFY_DRY_RUN:-0}"
 IDLE_MSG="Claude is waiting for your input"
 mode="${1:-stop}"
 
@@ -218,6 +221,28 @@ in_flight() {  # in_flight TRANSCRIPT SINCE — "N agent(s), M task(s)" when any
   [ "$(( ${a:-0} + ${t:-0} ))" -gt 0 ] && echo "${a:-0} agent(s), ${t:-0} command/monitor(s)"
 }
 
+pending_request() {  # what Claude is waiting on: "KIND<TAB>TEXT" from the unanswered tool call
+  # A permission prompt's payload only says "Claude needs your permission" — for a
+  # question, a plan, and a shell command alike. The transcript already holds the call.
+  local tp=$1
+  [ -f "$tp" ] || return 0
+  tail -c 2000000 "$tp" 2>/dev/null | tail -n +2 | jq -rs '
+    def cut(n): gsub("\\s+"; " ") | if length > n then .[0:n-1] + "…" else . end;
+    ([.[] | select(.type == "user") | .message.content | arrays | .[]
+       | select(.type? == "tool_result") | .tool_use_id]) as $done
+    | [.[] | select(.type == "assistant") | .message.content | arrays | .[]
+       | select(.type? == "tool_use") | select(.id as $i | $done | index($i) | not)] | last // empty
+    | .input as $in
+    | if .name == "AskUserQuestion" then
+        "question\t" + (($in.questions[0].question // "") | cut(150))
+          + (if ($in.questions | length) > 1 then " (외 \(($in.questions | length) - 1)개)" else "" end)
+      elif .name == "ExitPlanMode" then "plan\t계획 승인을 기다리는 중"
+      elif .name == "Bash" then "permission\tBash: " + (($in.description // $in.command // "") | cut(110))
+      elif ($in.file_path? // null) != null then "permission\t\(.name): " + ($in.file_path | split("/") | last)
+      elif ($in.url? // null) != null then "permission\t\(.name): " + ($in.url | cut(100))
+      else "permission\t" + (.name | sub("^mcp__"; "") | gsub("__"; " · ")) end' 2>/dev/null
+}
+
 recap_since() {  # the away_summary Claude Code wrote after EPOCH, if any
   local tp=$1 iso
   [ -f "$tp" ] || return 0
@@ -325,6 +350,7 @@ case "$mode" in
         r=$(recap_since "$tp" "$armed_at")
         [ -n "$r" ] || continue
         rm -f "$sent"
+        [ "$DRY_RUN" = 1 ] && quit "recap swapped in (dry-run): $r"
         # clicked or dismissed means you have seen it; re-posting would pop it back up
         terminal-notifier -list "$group" 2>/dev/null | tail -n +2 | grep -q . ||
           quit "recap ready but notice already dismissed"
@@ -365,9 +391,21 @@ esac
 # ------------------------------------------------------------------ ask mode
 message=$(field .message)
 recap=$(field .recap)
+ntype=$(field .notification_type)
 armed_at=""; dur=""
+# Route by Claude Code's own notification_type; guessing from the message text is only
+# for payloads that lack it. Informational types would be noise: completion is already
+# decided here, and auth/quota/computer-use notices need nothing from you.
+if [ -z "$ntype" ]; then
+  if printf '%s' "$message" | grep -qi 'waiting for your input'; then ntype=idle_prompt
+  else ntype=permission_prompt; fi
+fi
+case "$ntype" in
+  idle_prompt|permission_prompt|elicitation_dialog|elicitation_url_dialog|agent_needs_input|worker_permission_prompt|push_notification) ;;
+  *) log "skip: notification_type=$ntype is informational"; exit 0 ;;
+esac
 
-if printf '%s' "$message" | grep -qi 'waiting for your input'; then
+if [ "$ntype" = idle_prompt ]; then
   # Claude Code reports the main loop idle — deliver, unless work is still in flight
   [ -f "$pending" ] || { log "skip: idle but nothing armed"; exit 0; }
   IFS=$'\t' read -r armed_at started dur status task < "$pending"
@@ -382,10 +420,22 @@ if printf '%s' "$message" | grep -qi 'waiting for your input'; then
   body="${recap:-$task}"
   if [ "$kind" = failed ]; then SOUND="${CLAUDE_NOTIFY_ASK_SOUND-Ping}"
   else SOUND="${CLAUDE_NOTIFY_SOUND-Glass}"; fi
+elif [ "$ntype" = push_notification ]; then
+  # Claude chose to reach you: its message is the whole point
+  kind=push
+  body="${message:-Claude 가 알림을 보냈다}"
+  SOUND="${CLAUDE_NOTIFY_ASK_SOUND-Ping}"
 else
-  # a real prompt: permission request, or anything else Claude Code asks for
+  # Claude is blocked on you. Say on what, so you can tell from the banner whether to go.
   kind=ask
-  body="${message:-입력을 기다리는 중}"
+  req=""
+  [ "$ntype" = permission_prompt ] && req=$(pending_request "$(transcript)")
+  case "${req%%$'\t'*}" in
+    question)   kind=question; body="${req#*$'\t'}" ;;
+    plan)       kind=question; body="${req#*$'\t'}" ;;
+    permission) body="${req#*$'\t'}" ;;
+    *)          body="${message:-입력을 기다리는 중}" ;;
+  esac
   SOUND="${CLAUDE_NOTIFY_ASK_SOUND-Ping}"
 fi
 
@@ -437,9 +487,10 @@ fi
 
 # ------------------------------------------------------------------- deliver
 case "$kind" in
-  ask)    title="Claude Code — 확인 필요" ;;
-  failed) title="Claude Code — 턴 중단" ;;
-  *)      title="Claude Code" ;;
+  question) title="Claude Code — 질문" ;;
+  ask)      title="Claude Code — 권한 요청" ;;
+  failed)   title="Claude Code — 턴 중단" ;;
+  *)        title="Claude Code" ;;
 esac
 
 # subtitle carries where and how long; the body carries what the turn was about
@@ -449,6 +500,7 @@ meta="$where"
 subtitle="$meta"
 [ -n "$body" ] || body=$([ "$kind" = failed ] && echo "턴이 중단됐다" || echo "작업 완료")
 group="claude-$kind-$session"
+case "$kind" in question|push) group="claude-ask-$session" ;; esac
 
 notify_osascript() {
   esc() { printf '%s' "$1" | sed 's/[\\"]/\\&/g'; }
@@ -458,7 +510,13 @@ notify_osascript() {
   osascript -e "$s" >/dev/null 2>&1 || true
 }
 
-if command -v terminal-notifier >/dev/null 2>&1; then
+if [ "$DRY_RUN" = 1 ]; then
+  log "sent[$kind] (dry-run): $subtitle | $body"
+  if [ "$kind" = done ] || [ "$kind" = failed ]; then
+    [ -z "$recap" ] && [ -n "$armed_at" ] &&
+      printf '%s\t%s\t%s\t%s\t%s\n' "$armed_at" "$group" "$title" "$subtitle" "$jump" > "$sent"
+  fi
+elif command -v terminal-notifier >/dev/null 2>&1; then
   args=(-title "$title" -message "$body" -group "$group")
   [ -n "$subtitle" ] && args+=(-subtitle "$subtitle")
   [ -n "$SOUND" ] && args+=(-sound "$SOUND")
@@ -466,7 +524,7 @@ if command -v terminal-notifier >/dev/null 2>&1; then
   if terminal-notifier "${args[@]}" >/dev/null 2>&1; then
     log "sent[$kind]: $subtitle | $body"
     # leave a note for the watcher so it can swap in the recap later
-    if [ "$kind" != ask ] && [ -z "$recap" ] && [ -n "$armed_at" ]; then
+    if { [ "$kind" = done ] || [ "$kind" = failed ]; } && [ -z "$recap" ] && [ -n "$armed_at" ]; then
       printf '%s\t%s\t%s\t%s\t%s\n' "$armed_at" "$group" "$title" "$subtitle" "$jump" > "$sent"
     fi
   else log "terminal-notifier failed -> osascript"; notify_osascript; fi
