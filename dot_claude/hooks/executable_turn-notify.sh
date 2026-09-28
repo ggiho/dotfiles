@@ -17,10 +17,14 @@
 # after idle) confirms it, unless an agent launched from this session is still alive —
 # then the notice is held and carried to the turn in which the last agent reports back.
 #
+# Claude Code does watch background *commands*: it withholds the idle signal until they
+# end, so its silence is meaningful. It sometimes also stays silent with nothing running.
+#
 # ~189s after an idle turn Claude Code writes an away_summary recap into the transcript
 # (what was done, what it needs from you). A detached watcher swaps the notice's body for
-# that recap while it is still in Notification Center, and delivers it outright if the
-# idle signal never came.
+# that recap while it is still in Notification Center. If the idle signal never came, it
+# delivers the recap itself — unless a command started this turn is still running, in
+# which case the notice is carried to the turn that command's completion wakes.
 #
 # Env knobs:
 #   CLAUDE_NOTIFY_MIN_SECONDS  don't announce turns shorter than this (default 30)
@@ -29,6 +33,7 @@
 #   CLAUDE_NOTIFY_PENDING_TTL  drop an armed notice older than this (default 900s)
 #   CLAUDE_NOTIFY_BG_STALE     an agent silent for longer than this is presumed dead (default 900s)
 #   CLAUDE_NOTIFY_RECAP        0 disables the recap watcher (default 1)
+#   CLAUDE_NOTIFY_LOG          log path (default ~/.claude/hooks/turn-notify.log)
 
 set -u
 
@@ -37,7 +42,7 @@ PENDING_TTL="${CLAUDE_NOTIFY_PENDING_TTL:-900}"
 BG_STALE="${CLAUDE_NOTIFY_BG_STALE:-900}"
 RECAP="${CLAUDE_NOTIFY_RECAP:-1}"
 STATE_DIR="${TMPDIR:-/tmp}/claude-turn-notify"
-LOG="$HOME/.claude/hooks/turn-notify.log"
+LOG="${CLAUDE_NOTIFY_LOG:-$HOME/.claude/hooks/turn-notify.log}"
 mode="${1:-stop}"
 
 if [ "$mode" = watch ]; then payload=""; session="${2:-nosession}"
@@ -137,6 +142,38 @@ running_agents() {  # background agents launched from this session that are stil
   done | wc -l | tr -d ' '
 }
 
+running_bash() {  # background commands started since EPOCH that have not ended
+  # Claude Code withholds its idle signal while a background command runs, so its silence
+  # is information: the recap fallback must not overrule it. Only commands started during
+  # the turn count — one left running from an earlier turn (a dev server) may never end,
+  # and Claude Code would then stay silent for good; there the fallback is the only way
+  # a notice gets out.
+  local tp=$1 since
+  [ -f "$tp" ] || { echo 0; return; }
+  since=$(date -u -r "$2" '+%Y-%m-%dT%H:%M:%S')
+  scan "$tp" 'in background with ID' 'to the background (ID' 'Successfully stopped task' '<task-notification>' |
+  jq -r --arg since "$since" '
+    def txt: if type == "string" then . elif type == "array" then map(.text? // "") | join("") else "" end;
+    def ids: [match("<task-id>([A-Za-z0-9]+)</task-id>"; "g").captures[0].string] | .[];
+    if .type == "queue-operation" then (.content // "" | ids) | "done \(.)"
+    elif .type == "user" then .message.content as $c | (.timestamp // "")[:19] as $ts
+      | if ($c | type) == "string" then ($c | ids) | "done \(.)"
+        elif ($c | type) == "array" then $c[]
+          | if .type? == "text" then (.text // "" | ids) | "done \(.)"
+            elif .type? == "tool_result" then (.content | txt) as $t
+              | if ($t | startswith("Command running in background with ID: ")) or
+                   ($t | startswith("Command did not complete")) then
+                  (try ($t | capture("ID: (?<id>[A-Za-z0-9]+)").id) catch empty)
+                  | if $ts >= $since then "run \(.)" else "old \(.)" end
+                elif ($t | startswith("{\"message\":\"Successfully stopped task: ")) then
+                  (try ($t | capture("stopped task: (?<id>[A-Za-z0-9]+)").id) catch empty) | "done \(.)"
+                else empty end
+            else empty end
+        else empty end
+    else empty end' 2>/dev/null |
+  awk '{ last[$2] = $1 } END { n = 0; for (id in last) if (last[id] == "run") n++; print n }'
+}
+
 recap_since() {  # the away_summary Claude Code wrote after EPOCH, if any
   local tp=$1 iso
   [ -f "$tp" ] || return 0
@@ -155,13 +192,13 @@ case "$mode" in
     if [ -f "$pending" ]; then
       rm -f "$pending"
       case "$prompt" in
-        "<task-notification>"*) log "disarmed (background agent reported back)" ;;
+        *"<task-notification>"*) log "disarmed (background task reported back)" ;;
         *)                      log "disarmed (new prompt)" ;;
       esac
     fi
     rm -f "$sent"
     # a prompt you typed starts new work; an agent reporting back continues the old one
-    case "$prompt" in "<task-notification>"*) ;; *) rm -f "$carry" ;; esac
+    case "$prompt" in *"<task-notification>"*) ;; *) rm -f "$carry" ;; esac
     exit 0 ;;
 
   probe)
@@ -203,7 +240,17 @@ case "$mode" in
         [ "$(cut -f1 "$pending")" = "$armed_at" ] || exit 0     # superseded by a newer turn
         r=$(recap_since "$tp" "$armed_at")
         [ -n "$r" ] || continue
-        # recap written but no idle signal ever arrived: the recap is the confirmation
+        IFS=$'\t' read -r _ started _ _ task < "$pending"
+        b=$(running_bash "$tp" "${started:-$armed_at}")
+        if [ "${b:-0}" -gt 0 ]; then
+          # Claude Code is silent because of these: when they finish, the session wakes
+          # with a <task-notification>, and that turn carries the notice home
+          [ -f "$carry" ] || printf '%s\t%s\n' "$started" "$task" > "$carry"
+          rm -f "$pending"
+          log "hold: $b background command(s) from this turn still running"
+          exit 0
+        fi
+        # recap written, nothing of this turn still running, yet no idle signal: a miss
         log "idle signal missing; recap arrived"
         jq -n --arg s "$session" --arg c "$(cut -f1 "$ctx" 2>/dev/null)" --arg t "$tp" --arg r "$r" \
           '{session_id:$s, cwd:$c, transcript_path:$t, recap:$r,
