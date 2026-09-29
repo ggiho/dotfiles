@@ -1546,7 +1546,7 @@ ddb-export table="" bucket="" prefix="":
 # YAML 설정으로 테이블 생성. 플래그 없이 실행하면 명령만 출력한다(dry-run).
 # create/*.yaml 이 두 가지 스키마로 섞여 있어서, table_name 이면 dynamodb_builder,
 # base_name+environments 면 multi_env_deploy 로 보낸다.
-# hint: config: YAML 경로 (비우면 create/*.yaml 중 fzf)
+# hint: config: YAML 경로 (비우면 create/*.yaml 중 fzf, [새로 만들기] 로 기본값 YAML 생성)
 # hint: env: 환경 목록 (콤마 구분). 비우면 builder 는 table_name 그대로 1개, multi_env 는 YAML 의 environments
 # hint: execute: true 면 실제 생성
 [group('dynamodb')]
@@ -1556,9 +1556,27 @@ ddb-create config="" env="" execute="false":
   {{DDB_PICK}}
   dir="{{DDB_SCRIPT_DIR}}/create"
   cfg="{{config}}"
+  new_marker="[새로 만들기]"
+  execute="{{execute}}"
   if [ -z "$cfg" ]; then
-    cfg=$(find "$dir" -maxdepth 1 -name '*.yaml' | sort | pick_or_type "config")
+    cfg=$( { echo "$new_marker"; find "$dir" -maxdepth 1 -name '*.yaml' | sort; } | pick_or_type "config")
     [ -n "$cfg" ] || exit 0
+  fi
+  # 새로 만들기: multi_env_deploy.py 의 기본값으로 <이름>_config.yaml 을 만들고, 아래
+  # multienv 경로로 이어서 미리보기한다. 기본 키(id/createdAt)를 보지도 않고 테이블을
+  # 만들지 않도록, 새로 만든 직후에는 execute=true 여도 미리보기만 한다.
+  if [ "$cfg" = "$new_marker" ]; then
+    read -rp "테이블 기본명 (예: BatchJobLog -> OnTheGo{Env}BatchJobLog): " base
+    [ -n "$base" ] || exit 0
+    [[ "$base" =~ ^[A-Za-z0-9_.-]+$ ]] || { echo "영문·숫자·_ . - 만 쓸 수 있습니다: $base" >&2; exit 1; }
+    cfg="$dir/$(printf '%s' "$base" | tr '[:upper:]' '[:lower:]')_config.yaml"
+    if [ -f "$cfg" ]; then
+      echo ">> 이미 있는 설정을 씁니다 (덮어쓰지 않음): $cfg" >&2
+    else
+      python3 -c "import sys; sys.path.insert(0, sys.argv[1]); import multi_env_deploy as m; e=[x.strip().capitalize() for x in sys.argv[3].split(',') if x.strip()] or ['Dev','Sqa','Uat','Prod']; m.load_or_create_config(sys.argv[2], e)" "$dir" "$base" "{{env}}" >/dev/null
+      echo ">> 새 설정 생성: $cfg  (키·환경을 확인하고 필요하면 고친 뒤 execute=true 로 다시 실행)" >&2
+      execute=false
+    fi
   fi
   [ -f "$cfg" ] || { echo "No such config: $cfg" >&2; exit 1; }
 
@@ -1568,7 +1586,7 @@ ddb-create config="" env="" execute="false":
   echo ">> $(basename "$cfg"): $kind schema" >&2
 
   args=()
-  [ "{{execute}}" = "true" ] && args+=(--execute)
+  [ "$execute" = "true" ] && args+=(--execute)
   case "$kind" in
     builder)
       [ -n "{{env}}" ] && args+=(--env "{{env}}")
@@ -1583,7 +1601,7 @@ ddb-create config="" env="" execute="false":
       echo "Config has neither table_name nor base_name; cannot tell which tool it is for." >&2
       exit 1 ;;
   esac
-  [ "{{execute}}" = "true" ] || echo ">> dry-run only. Pass execute=true to create." >&2
+  [ "$execute" = "true" ] || echo ">> dry-run only. Pass execute=true to create." >&2
 
 # hint: source_table: 복사할 원본 테이블 (비우면 fzf로 선택)
 # hint: new_table: 새 테이블 이름 (비우면 환경 접미사를 바꾼 후보를 제시)
