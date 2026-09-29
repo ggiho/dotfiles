@@ -223,6 +223,10 @@ TABLE_PY        := justfile_directory() + "/lib/table.py"
 # psql is not installed; these run through the pgcli tool venv, which has psycopg.
 PGQ_PY          := justfile_directory() + "/lib/pgq.py"
 PGQ_PYTHON      := env_var_or_default("PGQ_PYTHON", env_var("HOME") + "/.local/share/uv/tools/pgcli/bin/python")
+# ddb-create / ddb-copy 의 스크립트는 yaml 과 boto3 가 필요하다. PATH 의 python3 에 기대지
+# 않는다: 부르는 셸에 따라 macOS 기본 3.9(/usr/bin, 둘 다 없음)가 잡혀서 j 로 돌릴 때
+# "No module named 'yaml'" 로 죽었다.
+DDB_PYTHON      := env_var_or_default("DDB_PYTHON", "/opt/homebrew/bin/python3")
 # Parses the Aurora audit CSV (quoted query field, microsecond timestamps).
 AUDIT_TSV_PY    := justfile_directory() + "/lib/audit_tsv.py"
 
@@ -267,22 +271,29 @@ pick_or_type() {
 }
 '''
 
-# 계정 선택. 레시피가 builder="<...>/dynamodb_builder.py" 를 정한 뒤 끼워 넣는다.
+# 계정 선택. 레시피가 py="{{DDB_PYTHON}}" 와 builder="<...>/dynamodb_builder.py" 를 정한 뒤 끼워 넣는다.
 # 환경만 보고 계정을 정하면 틀린다 -- UAT 테이블이 prod 에 51개, nonprod 에 7개
 # (OnTheGoUat*, OnTheGoLoginObserveUAT) 있다. 그래서 환경마다 fzf 로 고르게 하고,
 # 목록은 그 환경의 테이블이 많은 계정 순으로 개수·예시·같은 계열을 보여준다.
 DDB_ACCOUNT     := '''
-ddb_index() {
+ddb_index() {  # 실패하면 non-zero 를 돌려준다 -- 부르는 쪽이 index=$(ddb_index) || exit 1
   local f; f=$(mktemp)
+  if ! "$py" -c 'import yaml, boto3' 2>/dev/null; then
+    echo "yaml·boto3 가 없는 파이썬입니다: $py  (DDB_PYTHON 으로 다른 파이썬을 지정)" >&2
+    rm -f "$f"; return 1
+  fi
   echo ">> 계정별 테이블 목록 읽는 중..." >&2
-  python3 "$builder" --table-index > "$f"
+  if ! "$py" "$builder" --table-index > "$f"; then
+    echo "계정별 테이블 목록을 읽지 못했습니다." >&2
+    rm -f "$f"; return 1
+  fi
   printf '%s\n' "$f"
 }
 # 둘 다 pick_or_type 처럼 || true 로 끝난다: Esc·빈 결과에서 fzf 가 실패해도 set -e 로
 # 죽지 않고 빈 값을 돌려줘서, 부르는 쪽이 "조용히 종료"나 안내 문구를 고를 수 있다.
 pick_profile() {  # env table index -> 고른 프로파일 (env 가 auto 면 이름에서 찾는다)
   local label="$1"; [ "$1" = "_" ] || [ "$1" = "auto" ] && label=""
-  python3 "$builder" --rank-profiles "$1" "$2" --index "$3" | \
+  "$py" "$builder" --rank-profiles "$1" "$2" --index "$3" | \
     fzf --prompt="${label:+$label }계정 ($2)> " --height=40% --scheme=default --no-sort \
         --delimiter=$'\t' --with-nth=1,2 \
         --header="위일수록 그 환경 테이블이 많은 계정. 같은 계열·이미 있음 표시를 보고 고르세요" | cut -f1 || true
@@ -1588,11 +1599,12 @@ ddb-create config="" env="" execute="false":
   set -euo pipefail
   {{DDB_PICK}}
   dir="{{DDB_SCRIPT_DIR}}/create"
+  py="{{DDB_PYTHON}}"
   builder="$dir/dynamodb_builder.py"
   {{DDB_ACCOUNT}}
   cfg="{{config}}"
   execute="{{execute}}"
-  index=$(ddb_index); trap 'rm -f "$index"' EXIT
+  index=$(ddb_index) || exit 1; trap 'rm -f "$index"' EXIT
   from_marker="[기존 테이블에서 시작]"
   new_marker="[빈 기본값]"
   if [ -z "$cfg" ]; then
@@ -1615,7 +1627,7 @@ ddb-create config="" env="" execute="false":
     fi
     [ -n "$name" ] || exit 0
     [ -n "{{env}}" ] && new_args+=(--env "{{env}}")
-    res=$(python3 "$builder" --new "$name" ${new_args[@]+"${new_args[@]}"} | tail -1)
+    res=$("$py" "$builder" --new "$name" ${new_args[@]+"${new_args[@]}"} | tail -1)
     cfg="${res#* }"
     case "$res" in
       CREATED\ *) echo ">> 새 설정 생성: $cfg  (키·환경을 확인하고 필요하면 고친 뒤 execute=true 로 다시 실행)" >&2
@@ -1628,7 +1640,7 @@ ddb-create config="" env="" execute="false":
 
   env_args=(); [ -n "{{env}}" ] && env_args+=(--env "{{env}}")
   # 만들 테이블마다 계정을 고른다 (환경 -> 프로파일)
-  mapfile -t targets < <(python3 "$builder" "$cfg" --targets ${env_args[@]+"${env_args[@]}"})
+  mapfile -t targets < <("$py" "$builder" "$cfg" --targets ${env_args[@]+"${env_args[@]}"})
   map=""
   for tgt in "${targets[@]}"; do
     e="${tgt%%$'\t'*}"; t="${tgt#*$'\t'}"
@@ -1638,7 +1650,7 @@ ddb-create config="" env="" execute="false":
 
   args=(--profiles "${map%,}")
   [ "$execute" = "true" ] && args+=(--execute)
-  python3 "$builder" "$cfg" "${args[@]}" ${env_args[@]+"${env_args[@]}"}
+  "$py" "$builder" "$cfg" "${args[@]}" ${env_args[@]+"${env_args[@]}"}
   [ "$execute" = "true" ] || echo ">> dry-run only. Pass execute=true to create." >&2
 
 # hint: source_table: 복사할 원본 테이블 (비우면 fzf로 선택)
@@ -1648,9 +1660,10 @@ ddb-copy source_table="" new_table="":
   #!/usr/bin/env bash
   set -euo pipefail
   {{DDB_PICK}}
+  py="{{DDB_PYTHON}}"
   builder="{{DDB_SCRIPT_DIR}}/create/dynamodb_builder.py"
   {{DDB_ACCOUNT}}
-  index=$(ddb_index); trap 'rm -f "$index"' EXIT
+  index=$(ddb_index) || exit 1; trap 'rm -f "$index"' EXIT
   # 원본: 이름을 줬어도 계정은 목록에서 찾는다 (같은 이름이 두 계정에 있으면 고르게)
   picked=$(pick_source "$index" "{{source_table}}"); [ -n "$picked" ] || { echo "원본 테이블을 찾지 못했습니다: {{source_table}}" >&2; exit 1; }
   src_profile=$(printf '%s' "$picked" | cut -f1); src=$(printf '%s' "$picked" | cut -f2)
@@ -1665,7 +1678,7 @@ ddb-copy source_table="" new_table="":
   read -r reply || reply=""
   case "$reply" in y|Y|yes|YES) ;; *) echo "Aborted."; exit 1 ;; esac
 
-  python3 "{{DDB_SCRIPT_DIR}}/create/copy_table.py" "$src" "$dst" --execute --yes --source-profile "$src_profile" --target-profile "$dst_profile"
+  "$py" "{{DDB_SCRIPT_DIR}}/create/copy_table.py" "$src" "$dst" --execute --yes --source-profile "$src_profile" --target-profile "$dst_profile"
 
 # hint: source_table: 복사할 원본 테이블 (비우면 fzf로 선택)
 # hint: new_table: 새 테이블 이름 (비우면 환경 접미사를 바꾼 후보를 제시)
@@ -1675,9 +1688,10 @@ ddb-copy-data source_table="" new_table="" limit="":
   #!/usr/bin/env bash
   set -euo pipefail
   {{DDB_PICK}}
+  py="{{DDB_PYTHON}}"
   builder="{{DDB_SCRIPT_DIR}}/create/dynamodb_builder.py"
   {{DDB_ACCOUNT}}
-  index=$(ddb_index); trap 'rm -f "$index"' EXIT
+  index=$(ddb_index) || exit 1; trap 'rm -f "$index"' EXIT
   # 원본: 이름을 줬어도 계정은 목록에서 찾는다 (같은 이름이 두 계정에 있으면 고르게)
   picked=$(pick_source "$index" "{{source_table}}"); [ -n "$picked" ] || { echo "원본 테이블을 찾지 못했습니다: {{source_table}}" >&2; exit 1; }
   src_profile=$(printf '%s' "$picked" | cut -f1); src=$(printf '%s' "$picked" | cut -f2)
@@ -1699,9 +1713,9 @@ ddb-copy-data source_table="" new_table="" limit="":
   case "$reply" in y|Y|yes|YES) ;; *) echo "Aborted."; exit 1 ;; esac
 
   if [ -n "$lim" ]; then
-    python3 "{{DDB_SCRIPT_DIR}}/create/copy_table.py" "$src" "$dst" --data --limit "$lim" --yes --source-profile "$src_profile" --target-profile "$dst_profile"
+    "$py" "{{DDB_SCRIPT_DIR}}/create/copy_table.py" "$src" "$dst" --data --limit "$lim" --yes --source-profile "$src_profile" --target-profile "$dst_profile"
   else
-    python3 "{{DDB_SCRIPT_DIR}}/create/copy_table.py" "$src" "$dst" --data --yes --source-profile "$src_profile" --target-profile "$dst_profile"
+    "$py" "{{DDB_SCRIPT_DIR}}/create/copy_table.py" "$src" "$dst" --data --yes --source-profile "$src_profile" --target-profile "$dst_profile"
   fi
 
 # Candidate names for ddb-copy / ddb-create: the same name with only its environment
@@ -1716,7 +1730,7 @@ _ddb-suggest name index="":
   set -euo pipefail
   # index 를 주면 모든 계정의 테이블로 거른다. 없으면 지금 계정만 본다.
   if [ -n "{{index}}" ]; then existing=$(cut -f2 "{{index}}" | grep .); else existing=$({{DDB_TABLES}}); fi
-  python3 "{{DDB_SCRIPT_DIR}}/create/dynamodb_builder.py" --suggest "{{name}}" | \
+  "{{DDB_PYTHON}}" "{{DDB_SCRIPT_DIR}}/create/dynamodb_builder.py" --suggest "{{name}}" | \
     grep -vxF -f <(printf '%s\n' "$existing") || true
 
 # sysbench
