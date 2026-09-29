@@ -1547,7 +1547,7 @@ ddb-export table="" bucket="" prefix="":
 # create/*.yaml 이 두 가지 스키마로 섞여 있어서, table_name 이면 dynamodb_builder,
 # base_name+environments 면 multi_env_deploy 로 보낸다.
 # hint: config: YAML 경로 (비우면 create/*.yaml 중 fzf)
-# hint: env: 환경 목록 (콤마 구분). builder 는 DEV,SQA / multi_env 는 Dev,Sqa 표기
+# hint: env: 환경 목록 (콤마 구분). 비우면 builder 는 table_name 그대로 1개, multi_env 는 YAML 의 environments
 # hint: execute: true 면 실제 생성
 [group('dynamodb')]
 ddb-create config="" env="" execute="false":
@@ -1574,9 +1574,11 @@ ddb-create config="" env="" execute="false":
       [ -n "{{env}}" ] && args+=(--env "{{env}}")
       python3 "$dir/dynamodb_builder.py" "$cfg" ${args[@]+"${args[@]}"} ;;
     multienv)
-      name=$(python3 -c "import yaml,sys; print(yaml.safe_load(open(sys.argv[1]))['base_name'])" "$cfg")
+      # --config 로 고른 파일을 그대로 넘긴다. 예전에는 base_name 만 넘겨서 스크립트가
+      # 기본 설정을 새로 만들어 이 YAML 을 덮어썼다 (dry-run 에서도). env 를 비우면
+      # YAML 의 environments 를 쓴다.
       [ -n "{{env}}" ] && args+=(--env "{{env}}")
-      python3 "$dir/multi_env_deploy.py" --name "$name" ${args[@]+"${args[@]}"} ;;
+      python3 "$dir/multi_env_deploy.py" --config "$cfg" ${args[@]+"${args[@]}"} ;;
     *)
       echo "Config has neither table_name nor base_name; cannot tell which tool it is for." >&2
       exit 1 ;;
