@@ -92,8 +92,14 @@ unalias j 2>/dev/null
 # Execution seam for j(). Kept as its own function so tests/test_j_wrapper.zsh
 # can override it and inspect the composed command; overriding `print -z` used
 # to serve that purpose, but j now runs the recipe directly.
+#
+# bash -c, not -lc: a login bash runs /etc/profile, whose path_helper moves /usr/bin
+# ahead of /opt/homebrew/bin. There is no ~/.bash_profile, so -l added nothing but
+# that reorder -- and python3 then resolved to the system 3.9 without yaml/boto3,
+# so the ddb-* recipes died with "No module named 'yaml'" under j but not under
+# plain just. -c keeps the PATH j was called with, the same as running just.
 __j_exec() {
-  eval "bash -lc $1"
+  eval "bash -c $1"
 }
 
 # Ask before running a recipe marked [confirm] in the justfile. Separate from
@@ -316,7 +322,7 @@ j() {
 
   cmd=$(printf '%s' "$dry" | python3 -c 'import re, sys
 text = sys.stdin.read()
-# Only the shebang is dropped; it is meaningless inside `bash -lc`.
+# Only the shebang is dropped; it is meaningless inside `bash -c`.
 # "set " and "echo" used to be stripped too, which silently ran every recipe
 # without its `set -euo pipefail` (failures did not abort) and hid its progress
 # messages.

@@ -146,12 +146,23 @@ set +e
 source "$TEST_ALIASES"
 set -e
 
+# Check the REAL __j_exec before it is mocked below. A login bash (-l) runs
+# /etc/profile, whose path_helper puts /usr/bin ahead of /opt/homebrew/bin, so
+# python3 became the system 3.9 without yaml and the ddb-* recipes failed under j
+# but not under plain just.
+__real_j_exec=$(functions __j_exec)
+if [[ "$__real_j_exec" != *'bash -c '* || "$__real_j_exec" == *'bash -l'* ]]; then
+  print -u2 -- "ASSERT failed [__j_exec runs the body in a non-login bash -c]"
+  print -u2 -- "$__real_j_exec"
+  exit 1
+fi
+
 # Must come AFTER the source: aliases.zsh defines __j_exec, so a mock defined
 # earlier would be clobbered and the recipe would actually run.
 # j() runs the recipe through __j_exec; overriding it keeps the composed command
 # inspectable without dumping a database or creating a table for real.
 __j_exec() {
-  __buffer="bash -lc $1"
+  __buffer="bash -c $1"
 }
 
 # Answer the [confirm] prompt without a terminal.
@@ -179,7 +190,7 @@ run_mysqlsh_dump_case() {
   assert_eq "${#__vared_prompts[@]}" '2' 'mysqlsh-dump prompt count'
   assert_eq "${__vared_prompts[1]}" 'threads (parallel threads (default: 4)) [4]: ' 'mysqlsh-dump first prompt'
   assert_eq "${__vared_prompts[2]}" 'outdir (output directory (default: dump_<scope>_<timestamp>)): ' 'mysqlsh-dump second prompt'
-  assert_contains "$__buffer" 'bash -lc ' 'mysqlsh-dump bash wrapper'
+  assert_contains "$__buffer" 'bash -c ' 'mysqlsh-dump bash wrapper'
   assert_contains "$__buffer" 'mysqlsh --host=' 'mysqlsh-dump recipe body'
   assert_contains "$__buffer" '--threads=4' 'mysqlsh-dump threads default applied'
   assert_contains "$__buffer" 'dump host>' 'mysqlsh-dump keeps its own host picker'
@@ -210,7 +221,7 @@ run_ddb_copy_case() {
   j
 
   assert_eq "${#__vared_prompts[@]}" '2' 'ddb-copy prompt count'
-  assert_contains "$__buffer" 'bash -lc ' 'ddb-copy bash wrapper'
+  assert_contains "$__buffer" 'bash -c ' 'ddb-copy bash wrapper'
   assert_contains "$__buffer" 'copy_table.py' 'ddb-copy command body'
   assert_contains "$__buffer" 'SRC_TABLE' 'ddb-copy source arg reaches the body'
   assert_contains "$__buffer" 'NEW_TABLE' 'ddb-copy target arg reaches the body'
@@ -235,7 +246,7 @@ run_passthrough_case() {
   assert_contains "$__just_args" '|--working-directory|.|' 'passthrough runs in the current directory'
   assert_eq "${__just_args##*|--working-directory|.|}" 'mysqlsh-load|somehost|3306' 'arguments reach just verbatim'
   assert_eq "${#__vared_prompts[@]}" '0' 'passthrough asks no parameter prompts'
-  assert_eq "$__buffer" '' 'passthrough does not compose a bash -lc body'
+  assert_eq "$__buffer" '' 'passthrough does not compose a bash -c body'
   assert_eq "$__history" '' 'passthrough writes no synthetic history entry'
   assert_eq "$__atuin_cmd" '' 'passthrough writes nothing to atuin'
 }
@@ -265,7 +276,7 @@ run_confirm_accepted_case() {
   j
 
   assert_contains "$__confirm_prompt" 'mysqlsh-load' 'confirm prompt names the recipe'
-  assert_contains "$__buffer" 'bash -lc ' 'accepted confirm runs the recipe'
+  assert_contains "$__buffer" 'bash -c ' 'accepted confirm runs the recipe'
   assert_contains "$__history" 'mysqlsh-load' 'accepted confirm records history'
   assert_eq "$__atuin_cmd" "$__history" 'accepted confirm records to atuin'
   # Picking from the host list must yield the bare host, not the whole label.
@@ -297,7 +308,7 @@ run_no_confirm_case() {
   j
 
   assert_eq "$__confirm_prompt" '' 'unmarked recipe is not gated'
-  assert_contains "$__buffer" 'bash -lc ' 'unmarked recipe still runs'
+  assert_contains "$__buffer" 'bash -c ' 'unmarked recipe still runs'
 }
 
 run_passthrough_case
