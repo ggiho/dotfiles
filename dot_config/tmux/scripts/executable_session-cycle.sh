@@ -14,7 +14,9 @@ dir=$1
 tty=$2
 cur=${3#\$}
 
-target=$(tmux list-sessions -F '#{session_id}' | tr -d '$' | sort -n | awk -v cur="$cur" -v dir="$dir" '
+# scratch backs the Alt-p popup: something to summon, not a place to cycle through
+target=$(tmux list-sessions -F '#{session_id} #{session_name}' | tr -d '$' |
+  awk '$2 != "scratch" {print $1}' | sort -n | awk -v cur="$cur" -v dir="$dir" '
   { id[NR] = $1; if ($1 == cur) idx = NR }
   END {
     if (NR <= 1) exit 1                       # nothing to cycle to
