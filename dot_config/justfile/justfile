@@ -1613,7 +1613,7 @@ ddb-create config="" env="" execute="false":
   fi
 
   # 새 설정: 기존 테이블의 키·GSI·처리량·태그로 시작하거나, 기본값(<이름><ENV>,
-  # id/createdAt, PAY_PER_REQUEST)으로 시작한다. 같은 이름의 YAML 이 있으면 덮어쓰지
+  # 물어본 PK/SK -- Enter 면 id/createdAt, PAY_PER_REQUEST)으로 시작한다. 같은 이름의 YAML 이 있으면 덮어쓰지
   # 않는다. 새로 만든 직후에는 내용을 확인하도록 execute=true 여도 미리보기만 한다.
   if [ "$cfg" = "$from_marker" ] || [ "$cfg" = "$new_marker" ]; then
     new_args=()
@@ -1626,6 +1626,17 @@ ddb-create config="" env="" execute="false":
       read -rp "테이블 기본명 (예: Orders -> OrdersDEV): " name
     fi
     [ -n "$name" ] || exit 0
+    # 빈 기본값이고 아직 없는 설정일 때만 키를 묻는다. 이미 있으면 덮어쓰지 않으니 물어도
+    # 쓰이지 않고, 기존 테이블에서 시작하면 원본 키를 그대로 가져온다.
+    # --probe 가 실패하면 멈춘다. if 조건 안에서 grep 으로 받으면 실패가 "새 파일 아님" 으로
+    # 읽혀서 묻지도 않고 기본 키로 만들어졌다.
+    probe=$("$py" "$builder" --new "$name" --probe) || exit 1
+    if [ "$cfg" = "$new_marker" ] && [ "${probe%% *}" = "NEW" ]; then
+      echo ">> 키 타입: S=문자열  N=숫자  B=바이너리 (생략하면 S)" >&2
+      read -rp "PK 이름[:타입] [id:S]: " pk
+      read -rp "SK 이름[:타입] (없으면 -) [createdAt:S]: " sk
+      new_args+=(--pk "${pk:-id:S}" --sk "${sk:-createdAt:S}")
+    fi
     [ -n "{{env}}" ] && new_args+=(--env "{{env}}")
     res=$("$py" "$builder" --new "$name" ${new_args[@]+"${new_args[@]}"} | tail -1)
     cfg="${res#* }"
