@@ -1626,12 +1626,26 @@ ddb-create config="" env="" execute="false":
       read -rp "테이블 기본명 (예: Orders -> OrdersDEV): " name
     fi
     [ -n "$name" ] || exit 0
-    # 빈 기본값이고 아직 없는 설정일 때만 키를 묻는다. 이미 있으면 덮어쓰지 않으니 물어도
-    # 쓰이지 않고, 기존 테이블에서 시작하면 원본 키를 그대로 가져온다.
-    # --probe 가 실패하면 멈춘다. if 조건 안에서 grep 으로 받으면 실패가 "새 파일 아님" 으로
-    # 읽혀서 묻지도 않고 기본 키로 만들어졌다.
+    # 빈 기본값이면 키를 묻는다. 같은 이름의 설정이 이미 있으면 그 키를 보여주고 그대로
+    # 쓸지 다시 입력할지 고르게 한다 -- 예전에는 조용히 기존 파일을 써서, 키를 정하려고
+    # [빈 기본값] 을 골랐는데 묻지도 않고 옛 키(id/createdAt)로 테이블이 만들어졌다.
+    # 기존 테이블에서 시작하면 원본 키를 그대로 가져온다.
+    # --probe 가 실패하면 멈춘다 (if 조건의 grep 으로 받으면 실패가 "있음" 으로 읽혔다).
     probe=$("$py" "$builder" --new "$name" --probe) || exit 1
-    if [ "$cfg" = "$new_marker" ] && [ "${probe%% *}" = "NEW" ]; then
+    ask_keys=false
+    if [ "$cfg" = "$new_marker" ]; then
+      if [ "${probe%% *}" = "EXISTS" ]; then
+        read -r _ epath ekeys <<< "$probe"
+        echo ">> 같은 이름의 설정이 이미 있습니다: $epath" >&2
+        echo ">>   키: $ekeys" >&2
+        choice=$(printf '%s\n' "[이 설정 그대로 사용]" "[키 다시 입력 (덮어쓰기)]" | pick_or_type "existing config")
+        [ -n "$choice" ] || exit 0
+        if [ "$choice" = "[키 다시 입력 (덮어쓰기)]" ]; then ask_keys=true; new_args+=(--force); fi
+      else
+        ask_keys=true
+      fi
+    fi
+    if [ "$ask_keys" = true ]; then
       echo ">> 키 타입: S=문자열  N=숫자  B=바이너리 (생략하면 S)" >&2
       read -rp "PK 이름[:타입] [id:S]: " pk
       read -rp "SK 이름[:타입] (없으면 -) [createdAt:S]: " sk
