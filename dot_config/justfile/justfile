@@ -1613,7 +1613,7 @@ ddb-create config="" env="" execute="false":
   fi
 
   # 새 설정: 기존 테이블의 키·GSI·처리량·태그로 시작하거나, 기본값(<이름><ENV>,
-  # 물어본 PK/SK -- Enter 면 id/createdAt, PAY_PER_REQUEST)으로 시작한다. 같은 이름의 YAML 이 있으면 덮어쓰지
+  # 물어본 PK/SK/GSI -- Enter 면 id/createdAt 에 GSI 없음, PAY_PER_REQUEST)으로 시작한다. 같은 이름의 YAML 이 있으면 덮어쓰지
   # 않는다. 새로 만든 직후에는 내용을 확인하도록 execute=true 여도 미리보기만 한다.
   if [ "$cfg" = "$from_marker" ] || [ "$cfg" = "$new_marker" ]; then
     new_args=()
@@ -1650,6 +1650,16 @@ ddb-create config="" env="" execute="false":
       read -rp "PK 이름[:타입] [id:S]: " pk
       read -rp "SK 이름[:타입] (없으면 -) [createdAt:S]: " sk
       new_args+=(--pk "${pk:-id:S}" --sk "${sk:-createdAt:S}")
+      # GSI 는 이름을 비울 때까지 여러 개 받는다. 테이블을 만든 뒤에도 추가할 수 있지만
+      # (PK/SK 와 다르다) 처음부터 필요하면 여기서 넣는다.
+      prompt="GSI 이름 (없으면 Enter): "
+      while read -rp "$prompt" gname && [ -n "$gname" ]; do
+        read -rp "  GSI PK 이름[:타입]: " gpk
+        read -rp "  GSI SK 이름[:타입] (없으면 -) [-]: " gsk
+        read -rp "  projection [ALL] (ALL | KEYS_ONLY | INCLUDE:속성,...): " gproj
+        new_args+=(--gsi "$gname" "$gpk" "${gsk:--}" "${gproj:-ALL}")
+        prompt="GSI 이름 (더 없으면 Enter): "
+      done
     fi
     [ -n "{{env}}" ] && new_args+=(--env "{{env}}")
     res=$("$py" "$builder" --new "$name" ${new_args[@]+"${new_args[@]}"} | tail -1)
