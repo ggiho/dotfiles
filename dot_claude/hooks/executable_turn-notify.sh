@@ -135,10 +135,12 @@ claim() {
   printf '%s' "$c"
 }
 
-safe() {  # terminal-notifier reads its options through NSUserDefaults, which takes a value
-          # starting with "-" for an option and "(…)"/"{…}" for a plist, leaving the text
-          # empty. A zero-width space in front keeps it plain text.
-  case "$1" in -*|\(*|\{*|\<*|\"*) printf '\342\200\213%s' "$1" ;; *) printf '%s' "$1" ;; esac
+safe() {  # terminal-notifier rejects a -message/-subtitle value that starts with [ ( { < " or -
+          # ("Could not read the -message value") — and a question like "[빈 기본값] …" then
+          # fell back to osascript, posting as Script Editor with no click-to-jump. It strips
+          # exactly one leading backslash, so escaping every value is safe and shows nothing.
+          # (A zero-width space in front, tried first, did not help: verified 2026-09-29.)
+  printf '\\%s' "$1"
 }
 
 # ------------------------------------------------------------ transcript reads
@@ -460,8 +462,8 @@ case "$mode" in
         args=(-title "$title" -message "$(safe "$r")" -group "$group")
         [ -n "$subtitle" ] && args+=(-subtitle "$(safe "$subtitle")")
         [ -n "$jump" ] && args+=(-execute "$jump")
-        terminal-notifier "${args[@]}" >/dev/null 2>&1 && quit "recap swapped in: $r"
-        quit "recap swap failed"
+        err=$(terminal-notifier "${args[@]}" 2>&1) && quit "recap swapped in: $r"
+        quit "recap swap failed: $(printf '%s' "$err" | head -1)"
 
       elif [ "$(cat "$held" 2>/dev/null)" = "$armed_at" ]; then
         # parked. Normally the turn that background work wakes takes over (start mode
@@ -655,13 +657,13 @@ elif command -v terminal-notifier >/dev/null 2>&1; then
   [ -n "$subtitle" ] && args+=(-subtitle "$(safe "$subtitle")")
   [ -n "$SOUND" ] && args+=(-sound "$SOUND")
   [ -n "$jump" ] && args+=(-execute "$jump")
-  if terminal-notifier "${args[@]}" >/dev/null 2>&1; then
+  if err=$(terminal-notifier "${args[@]}" 2>&1); then
     log "sent[$kind]: $subtitle | $body"
     # leave a note for the watcher so it can swap in the recap later
     if { [ "$kind" = done ] || [ "$kind" = failed ]; } && [ -z "$recap" ] && [ -n "$armed_at" ]; then
       printf '%s\t%s\t%s\t%s\t%s\n' "$armed_at" "$group" "$title" "$subtitle" "$jump" > "$sent"
     fi
-  else log "terminal-notifier failed -> osascript"; notify_osascript; fi
+  else log "terminal-notifier failed ($(printf '%s' "$err" | head -1)) -> osascript"; notify_osascript; fi
 else
   log "sent[$kind] via osascript: $subtitle | $body"
   notify_osascript
