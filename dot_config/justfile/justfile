@@ -1688,6 +1688,40 @@ ddb-create config="" env="" execute="false":
   "$py" "$builder" "$cfg" "${args[@]}" ${env_args[@]+"${env_args[@]}"}
   [ "$execute" = "true" ] || echo ">> dry-run only. Pass execute=true to create." >&2
 
+# 운영 중인 테이블에 GSI 하나를 더한다. 플래그 없이 실행하면 명령만 출력한다(dry-run).
+# GSI 는 PK/SK 와 달리 테이블을 다시 만들지 않고 추가할 수 있다. update-table 한 번에
+# GSI 하나만 만들 수 있어서 한 번에 하나씩 받는다. 기존 GSI 이름·속성 타입 충돌·20개
+# 제한은 실제 테이블을 읽어 검사하고, PROVISIONED 테이블이면 테이블의 RCU/WCU 를 쓴다.
+# hint: table: 대상 테이블 (비우면 모든 계정에서 fzf, 같은 이름이 두 계정에 있으면 고름)
+# hint: execute: true 면 실제 추가
+[group('dynamodb')]
+ddb-add-gsi table="" execute="false":
+  #!/usr/bin/env bash
+  set -euo pipefail
+  {{DDB_PICK}}
+  py="{{DDB_PYTHON}}"
+  builder="{{DDB_SCRIPT_DIR}}/create/dynamodb_builder.py"
+  {{DDB_ACCOUNT}}
+  index=$(ddb_index) || exit 1; trap 'rm -f "$index"' EXIT
+  picked=$(pick_source "$index" "{{table}}")
+  if [ -z "$picked" ]; then
+    [ -n "{{table}}" ] && { echo "테이블을 찾지 못했습니다: {{table}}" >&2; exit 1; }
+    exit 0
+  fi
+  profile=$(printf '%s' "$picked" | cut -f1); tbl=$(printf '%s' "$picked" | cut -f2)
+
+  "$py" "$builder" --show-table "$tbl" "$profile" >&2
+  echo ">> 키 타입: S=문자열  N=숫자  B=바이너리 (생략하면 S)" >&2
+  read -rp "GSI 이름: " gname
+  [ -n "$gname" ] || exit 0
+  read -rp "  GSI PK 이름[:타입]: " gpk
+  read -rp "  GSI SK 이름[:타입] (없으면 -) [-]: " gsk
+  read -rp "  projection [ALL] (ALL | KEYS_ONLY | INCLUDE:속성,...): " gproj
+
+  args=(--add-gsi-live "$tbl" "$profile" --gsi "$gname" "$gpk" "${gsk:--}" "${gproj:-ALL}")
+  [ "{{execute}}" = "true" ] && args+=(--execute)
+  "$py" "$builder" "${args[@]}"
+
 # hint: source_table: 복사할 원본 테이블 (비우면 fzf로 선택)
 # hint: new_table: 새 테이블 이름 (비우면 환경 접미사를 바꾼 후보를 제시)
 [group('dynamodb')]
