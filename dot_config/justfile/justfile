@@ -1544,10 +1544,11 @@ ddb-export table="" bucket="" prefix="":
   echo ">> manifest-summary.json under the prefix carries the exact itemCount once done." >&2
 
 # YAML 설정으로 테이블 생성. 플래그 없이 실행하면 명령만 출력한다(dry-run).
-# create/*.yaml 이 두 가지 스키마로 섞여 있어서, table_name 이면 dynamodb_builder,
-# base_name+environments 면 multi_env_deploy 로 보낸다.
-# hint: config: YAML 경로 (비우면 create/*.yaml 중 fzf, [새로 만들기] 로 기본값 YAML 생성)
-# hint: env: 환경 목록 (콤마 구분). 비우면 builder 는 table_name 그대로 1개, multi_env 는 YAML 의 environments
+# 도구는 dynamodb_builder.py 하나다 (multi_env_deploy.py 는 2026-09-29 흡수·은퇴).
+# 환경을 주면 이름 속 환경 토큰만 바꾸고(OnTheGoDevX -> OnTheGoProdX,
+# ...ChatRoomDEV -> ...ChatRoomSQA), DEV/SQA 는 nonprod, UAT/PROD 는 prod 프로파일로 만든다.
+# hint: config: YAML 경로 (비우면 fzf: [기존 테이블에서 시작] / [빈 기본값] / create/*.yaml)
+# hint: env: 환경 목록 (콤마 구분, 대소문자 무관). 비우면 YAML 의 environments, 그것도 없으면 table_name 그대로 1개
 # hint: execute: true 면 실제 생성
 [group('dynamodb')]
 ddb-create config="" env="" execute="false":
@@ -1556,51 +1557,44 @@ ddb-create config="" env="" execute="false":
   {{DDB_PICK}}
   dir="{{DDB_SCRIPT_DIR}}/create"
   cfg="{{config}}"
-  new_marker="[새로 만들기]"
   execute="{{execute}}"
+  from_marker="[기존 테이블에서 시작]"
+  new_marker="[빈 기본값]"
   if [ -z "$cfg" ]; then
-    cfg=$( { echo "$new_marker"; find "$dir" -maxdepth 1 -name '*.yaml' | sort; } | pick_or_type "config")
+    cfg=$( { echo "$from_marker"; echo "$new_marker"; find "$dir" -maxdepth 1 -name '*.yaml' | sort; } | pick_or_type "config")
     [ -n "$cfg" ] || exit 0
   fi
-  # 새로 만들기: multi_env_deploy.py 의 기본값으로 <이름>_config.yaml 을 만들고, 아래
-  # multienv 경로로 이어서 미리보기한다. 기본 키(id/createdAt)를 보지도 않고 테이블을
-  # 만들지 않도록, 새로 만든 직후에는 execute=true 여도 미리보기만 한다.
-  if [ "$cfg" = "$new_marker" ]; then
-    read -rp "테이블 기본명 (예: BatchJobLog -> OnTheGo{Env}BatchJobLog): " base
-    [ -n "$base" ] || exit 0
-    [[ "$base" =~ ^[A-Za-z0-9_.-]+$ ]] || { echo "영문·숫자·_ . - 만 쓸 수 있습니다: $base" >&2; exit 1; }
-    cfg="$dir/$(printf '%s' "$base" | tr '[:upper:]' '[:lower:]')_config.yaml"
-    if [ -f "$cfg" ]; then
-      echo ">> 이미 있는 설정을 씁니다 (덮어쓰지 않음): $cfg" >&2
+
+  # 새 설정: 기존 테이블의 키·GSI·처리량·태그로 시작하거나, 기본값(OnTheGo{Env}<이름>,
+  # id/createdAt, PAY_PER_REQUEST)으로 시작한다. 같은 이름의 YAML 이 있으면 덮어쓰지
+  # 않는다. 새로 만든 직후에는 내용을 확인하도록 execute=true 여도 미리보기만 한다.
+  if [ "$cfg" = "$from_marker" ] || [ "$cfg" = "$new_marker" ]; then
+    new_args=()
+    if [ "$cfg" = "$from_marker" ]; then
+      src=$({{DDB_TABLES}} | pick_or_type "source table")
+      [ -n "$src" ] || exit 0
+      read -rp "새 테이블 이름 (원본: $src): " name
+      new_args+=(--from-table "$src")
     else
-      python3 -c "import sys; sys.path.insert(0, sys.argv[1]); import multi_env_deploy as m; e=[x.strip().capitalize() for x in sys.argv[3].split(',') if x.strip()] or ['Dev','Sqa','Uat','Prod']; m.load_or_create_config(sys.argv[2], e)" "$dir" "$base" "{{env}}" >/dev/null
-      echo ">> 새 설정 생성: $cfg  (키·환경을 확인하고 필요하면 고친 뒤 execute=true 로 다시 실행)" >&2
-      execute=false
+      read -rp "테이블 기본명 (예: Orders -> OnTheGo{Env}Orders): " name
     fi
+    [ -n "$name" ] || exit 0
+    [ -n "{{env}}" ] && new_args+=(--env "{{env}}")
+    res=$(python3 "$dir/dynamodb_builder.py" --new "$name" ${new_args[@]+"${new_args[@]}"} | tail -1)
+    cfg="${res#* }"
+    case "$res" in
+      CREATED\ *) echo ">> 새 설정 생성: $cfg  (키·환경을 확인하고 필요하면 고친 뒤 execute=true 로 다시 실행)" >&2
+                  execute=false ;;
+      EXISTS\ *)  echo ">> 이미 있는 설정을 씁니다 (덮어쓰지 않음): $cfg" >&2 ;;
+      *)          echo "설정 생성 실패: $res" >&2; exit 1 ;;
+    esac
   fi
   [ -f "$cfg" ] || { echo "No such config: $cfg" >&2; exit 1; }
 
-  # One line: a recipe body cannot contain lines starting at column 0, which is
-  # what a multi-line python -c string would produce.
-  kind=$(python3 -c "import yaml,sys; c=yaml.safe_load(open(sys.argv[1])) or {}; print('builder' if 'table_name' in c else 'multienv' if 'base_name' in c else 'unknown')" "$cfg")
-  echo ">> $(basename "$cfg"): $kind schema" >&2
-
   args=()
   [ "$execute" = "true" ] && args+=(--execute)
-  case "$kind" in
-    builder)
-      [ -n "{{env}}" ] && args+=(--env "{{env}}")
-      python3 "$dir/dynamodb_builder.py" "$cfg" ${args[@]+"${args[@]}"} ;;
-    multienv)
-      # --config 로 고른 파일을 그대로 넘긴다. 예전에는 base_name 만 넘겨서 스크립트가
-      # 기본 설정을 새로 만들어 이 YAML 을 덮어썼다 (dry-run 에서도). env 를 비우면
-      # YAML 의 environments 를 쓴다.
-      [ -n "{{env}}" ] && args+=(--env "{{env}}")
-      python3 "$dir/multi_env_deploy.py" --config "$cfg" ${args[@]+"${args[@]}"} ;;
-    *)
-      echo "Config has neither table_name nor base_name; cannot tell which tool it is for." >&2
-      exit 1 ;;
-  esac
+  [ -n "{{env}}" ] && args+=(--env "{{env}}")
+  python3 "$dir/dynamodb_builder.py" "$cfg" ${args[@]+"${args[@]}"}
   [ "$execute" = "true" ] || echo ">> dry-run only. Pass execute=true to create." >&2
 
 # hint: source_table: 복사할 원본 테이블 (비우면 fzf로 선택)
