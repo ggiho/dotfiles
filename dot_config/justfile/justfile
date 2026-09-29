@@ -1,6 +1,7 @@
 # ── Usage notes (2026-09-02, from 28,659 atuin entries) ──────────────────────
-# Nothing is deleted; this is a record of what the history does and does not show
-# being used, so the next cleanup does not have to redo the analysis.
+# A record of what the history does and does not show being used, so the next
+# cleanup does not have to redo the analysis. Removed on 2026-09-29: the pg-*
+# recipes (see below) and the commented-out mysql-dump-data / -no-data.
 #
 # Judged by how often the underlying command was run, NOT by recipe name -- the
 # `j` wrapper only started recording recipe names on 2026-08-31, and matching
@@ -12,16 +13,20 @@
 #   pg_dump 0   pg_restore 0   psql 0   sysbench 0   ssh -L/-N 0
 #
 # No evidence of use (underlying command never run):
-#   pg-dump-data, pg-dump-no-data, pg-dump-tables, pg-dump-roles,
-#   pg-import-roles, pg-load, pg-load-fast   -- pgcli is used for connecting,
-#                                               but nothing dumps/loads Postgres
+#   pg-* (7)   removed 2026-09-29 -- pg_dump/psql/pg_restore are not installed and
+#              not in the Brewfile, so they could not run at all. pgcli is used for
+#              connecting (PG_CONNECT stays: the redshift-* recipes use it). The
+#              recipes are in git history if Postgres dumps are ever needed.
 #   sysbench-prepare, sysbench-run, sysbench-cleanup
 #   tunnel-prod, tunnel-prod-writer          -- in prod.just, which is not in
 #                                               git/chezmoi, so removal is final
 #
 # Used, but not through these recipes:
 #   dms-*      `uv run dms` run 16x by hand (diff 13, tables 4, status 1);
-#              11 of the 15 dms recipes cover subcommands never invoked
+#              11 of the 15 dms recipes cover subcommands never invoked.
+#              If they fail with "no such directory": a long-lived tmux server can
+#              hold a stale DMSCTL_ROOT that beats the default in aliases.zsh --
+#              tmux set-environment -gu DMSCTL_ROOT (cleared 2026-09-29)
 #   docker-*   docker run 186x, but as ps 91 / compose 43 / start 13 / run 8;
 #              the recipes cover exec/logs/stats/clean/stop/rmi instead
 #   mysql-binlog-*   mysqlbinlog run 5x by hand; the Keychain fix on 2026-09-01
@@ -29,6 +34,13 @@
 #
 # Confirmed in use: mysqlsh-dump*, mysqlsh-load*, mysql-dump-users,
 #   mysql-import-users, pt-osc, aws-rds-list, rds-zeroetl-params, ddb-*
+#
+# By recipe name (j history 2026-08-31 .. 09-29): most used mysql-dump-users 6,
+#   ddb-describe 6, ddb-add-gsi 6, ddb-create 5, mysqlsh-load 4, mysql-import-users 4.
+#   Never used by name: docker-* 6, sysbench-* 3, dms-* 15, tunnel-* 2, the rds
+#   module 12 -- kept: the first two are cheap, dms/tunnel are used by hand.
+#   Recipes added or renamed in September (rsync-*, mysqlsh-dump, ddb-copy-data)
+#   have not had time to show up.
 # ─────────────────────────────────────────────────────────────────────────────
 
 # ── Path variables ────────────────────────────────────────────────────────────
@@ -298,6 +310,34 @@ pick_profile() {  # env table index -> 고른 프로파일 (env 가 auto 면 이
         --delimiter=$'\t' --with-nth=1,2 \
         --header="위일수록 그 환경 테이블이 많은 계정. 같은 계열·이미 있음 표시를 보고 고르세요" | cut -f1 || true
 }
+# 조회 레시피용. AWS_PROFILE 이 이미 있으면(aa 로 고른 경우) 그 계정만 보고, 없으면
+# 모든 계정에서 고른 뒤 그 계정을 AWS_PROFILE 로 export 한다 -- 이후 aws 명령이 전부 그
+# 계정으로 돈다. [default] 자격증명이 없어서, 예전에는 aa 를 먼저 안 하면 목록부터 실패했다.
+choose_table() {  # [name] -> tbl 을 정하고 AWS_PROFILE 을 export. Esc 면 tbl="" 로 돌아온다
+  tbl="${1:-}"
+  if [ -n "${AWS_PROFILE:-}" ]; then
+    [ -n "$tbl" ] || tbl=$(aws dynamodb list-tables --query "TableNames[]" --output text | tr "\t" "\n" | pick_or_type "table")
+    return 0
+  fi
+  local idx picked; idx=$(ddb_index) || return 1
+  picked=$(pick_source "$idx" "$tbl"); rm -f "$idx"
+  if [ -z "$picked" ]; then
+    [ -n "$tbl" ] && { echo "테이블을 찾지 못했습니다: $tbl" >&2; return 1; }
+    tbl=""; return 0
+  fi
+  export AWS_PROFILE="${picked%%$'\t'*}"; tbl="${picked#*$'\t'}"
+  echo ">> $tbl  ($AWS_PROFILE)" >&2
+}
+choose_account() {  # AWS_PROFILE 이 없으면 테이블 개수와 함께 계정을 고르게 하고 export
+  [ -n "${AWS_PROFILE:-}" ] && return 0
+  local idx p; idx=$(ddb_index) || return 1
+  p=$(awk -F'\t' '$3!="" {e[$1]=$3; next} {n[$1]+=($2!="")} END {for (k in n) printf "%s\t%d개\n", k, n[k]; for (k in e) printf "%s\t✗ %s\n", k, e[k]}' "$idx" | \
+      sort -t$'\t' -k2 -rn | fzf --prompt="계정> " --height=40% --scheme=default --no-sort \
+        --delimiter=$'\t' --with-nth=1,2 | cut -f1 || true)
+  rm -f "$idx"
+  [ -n "$p" ] || return 1
+  export AWS_PROFILE="$p"
+}
 pick_source() {  # index [name] -> "profile<TAB>table". 같은 이름이 두 계정에 있으면 고르게 한다
   # 이름을 주면 fzf 검색어가 아니라 awk 로 정확히 거른다: 한 줄이 "이름<TAB>프로파일" 이라
   # 검색어 ^이름$ 의 $ 는 줄 끝(프로파일 뒤)에 걸려 절대 맞지 않는다.
@@ -315,61 +355,6 @@ mod? rds '../../10_Database/AWS/rds/terraform/justfile'
 # PROD 터널 등 내부 인프라 레시피 (로컬 전용 파일, 없으면 조용히 무시)
 import? 'prod.just'
 # ──────────────────────────────────────────────────────────────────────────────
-
-# [deprecated: use mysqlsh-dump instead]
-# hint: host: e.g. <host from ~/.config/mysql/hosts>
-# hint: user: e.g. <db user>
-# hint: database: target schema (empty = user DBs only, excludes mysql/sys/information_schema/performance_schema)
-#
-# mysql-dump-data host user database="":
-#   #!/usr/bin/env bash
-#   set -euo pipefail
-#   timestamp=$(date +%Y%m%d_%H%M%S)
-#   if [ -z "{{database}}" ]; then
-#     out="dump_all_${timestamp}.sql"
-#     dbs=($(mysql --host="{{host}}" --user="{{user}}" \
-#       -Nse "SELECT schema_name FROM information_schema.schemata
-#             WHERE schema_name NOT IN ('mysql','information_schema','performance_schema','sys')"))
-#     mysqldump --host="{{host}}" --user="{{user}}" \
-#       --single-transaction --routines --triggers --events \
-#       --quick --skip-lock-tables --set-gtid-purged=OFF \
-#       --databases "${dbs[@]}" > "$out"
-#   else
-#     out="dump_{{database}}_${timestamp}.sql"
-#     mysqldump --host="{{host}}" --user="{{user}}" \
-#       --single-transaction --routines --triggers --events \
-#       --quick --skip-lock-tables --set-gtid-purged=OFF \
-#       "{{database}}" > "$out"
-#   fi
-#   echo "Written: $out"
-
-# [deprecated: use mysqlsh-dump-ddl instead]
-# hint: host: e.g. <host from ~/.config/mysql/hosts>
-# hint: user: e.g. <db user>
-# hint: database: target schema (empty = user DBs only, excludes mysql/sys/information_schema/performance_schema)
-#
-# mysql-dump-no-data host user database="":
-#   #!/usr/bin/env bash
-#   set -euo pipefail
-#   timestamp=$(date +%Y%m%d_%H%M%S)
-#   if [ -z "{{database}}" ]; then
-#     out="dump_all_nodata_${timestamp}.sql"
-#     dbs=($(mysql --host="{{host}}" --user="{{user}}" \
-#       -Nse "SELECT schema_name FROM information_schema.schemata
-#             WHERE schema_name NOT IN ('mysql','information_schema','performance_schema','sys')"))
-#     mysqldump --host="{{host}}" --user="{{user}}" \
-#       --single-transaction --routines --triggers --events \
-#       --quick --skip-lock-tables --set-gtid-purged=OFF --no-data \
-#       --databases "${dbs[@]}" > "$out"
-#   else
-#     out="dump_{{database}}_nodata_${timestamp}.sql"
-#     mysqldump --host="{{host}}" --user="{{user}}" \
-#       --single-transaction --routines --triggers --events \
-#       --quick --skip-lock-tables --set-gtid-purged=OFF --no-data \
-#       "{{database}}" > "$out"
-#   fi
-#   echo "Written: $out"
-
 
 # ── mysqlsh dump ──────────────────────────────────────────────────────────────
 # Two entry points on the CONTENT axis (data vs DDL). SCOPE -- whole instance,
@@ -413,7 +398,7 @@ _mysqlsh-dump-impl ddl_only threads outdir:
   [ "$ddl_only" = true ] && common_args+=(--ddlOnly=true)
   HOSTS_FILE="{{HOSTS_FILE}}"
   selected=$(grep -v '^#' "$HOSTS_FILE" | grep -v '^$' | \
-    fzf --prompt="dump host> " --height=40% --scheme=default)
+    fzf --prompt="dump host> " --height=40% --scheme=default || true)
   [ -z "$selected" ] && exit 0
   host=$(echo "$selected" | cut -d: -f2)
   port=$(echo "$selected" | cut -d: -f3)
@@ -428,7 +413,7 @@ _mysqlsh-dump-impl ddl_only threads outdir:
       "SELECT schema_name FROM information_schema.schemata \
        WHERE schema_name NOT IN ('mysql','sys','information_schema','performance_schema') \
        ORDER BY schema_name"; } | \
-    fzf --multi --prompt="dump schemas (Tab=multi)> " --height=50% --scheme=default)
+    fzf --multi --prompt="dump schemas (Tab=multi)> " --height=50% --scheme=default || true)
   [ -z "$schemas" ] && exit 0
   schema_count=$(printf '%s\n' "$schemas" | grep -c .)
   if printf '%s\n' "$schemas" | grep -qxF "$all_marker"; then
@@ -495,7 +480,7 @@ _mysqlsh-dump-impl ddl_only threads outdir:
   fi
   echo "Written: $out/"
 
-# hint: host: e.g. aurora-skt-otg-uat-cluster.cluster-czdk59pd0a4y.ap-northeast-2.rds.amazonaws.com
+# hint: host: e.g. <host from ~/.config/mysql/hosts>
 # hint: user: e.g. <db user>
 # hint: port: server port (default: 3306; tunneled hosts e.g. Horizon PROD use 13306)
 # hint: threads: parallel threads (default: 4)
@@ -514,7 +499,7 @@ mysqlsh-load host user port="3306" threads="4" target_schema="" on_exist="error"
   mapfile -t dumps < <(find . -maxdepth 2 -type f -name '@.json' 2>/dev/null | sed 's:/@\.json$::' | sort)
   if [ "${#dumps[@]}" -gt 0 ]; then
     indir=$(printf '%s\n' "${dumps[@]}" | \
-      fzf --prompt="load dir> " --height=40% --scheme=default)
+      fzf --prompt="load dir> " --height=40% --scheme=default || true)
   else
     read -rp "dump directory (경로 직접 입력): " indir
   fi
@@ -582,7 +567,7 @@ mysqlsh-load host user port="3306" threads="4" target_schema="" on_exist="error"
     echo "Loaded: $indir"
   fi
 
-# hint: host: e.g. aurora-skt-otg-uat-cluster.cluster-czdk59pd0a4y.ap-northeast-2.rds.amazonaws.com
+# hint: host: e.g. <host from ~/.config/mysql/hosts>
 # hint: user: e.g. <db user>
 # hint: indir: dump directory from mysqlsh-dump (single schema + tables)
 # hint: target_schema: final schema to move into (e.g. datawarehouse)
@@ -1239,6 +1224,11 @@ redshift-slow hours="24" top="20":
 ddb-list detail="false":
   #!/usr/bin/env bash
   set -euo pipefail
+  {{DDB_PICK}}
+  py="{{DDB_PYTHON}}"; builder="{{DDB_SCRIPT_DIR}}/create/dynamodb_builder.py"
+  {{DDB_ACCOUNT}}
+  choose_account || exit 0
+  echo ">> $AWS_PROFILE" >&2
   color=1
   { [ -t 1 ] && [ -z "${NO_COLOR:-}" ]; } || color=0
 
@@ -1289,8 +1279,9 @@ ddb-describe table="" full="false":
   #!/usr/bin/env bash
   set -euo pipefail
   {{DDB_PICK}}
-  tbl="{{table}}"
-  [ -n "$tbl" ] || tbl=$({{DDB_TABLES}} | pick_or_type "table")
+  py="{{DDB_PYTHON}}"; builder="{{DDB_SCRIPT_DIR}}/create/dynamodb_builder.py"
+  {{DDB_ACCOUNT}}
+  choose_table "{{table}}" || exit 1
   [ -n "$tbl" ] || exit 0
   raw=$(aws dynamodb describe-table --table-name "$tbl" --output json)
   # TTL lives behind its own API. Tolerate failure (e.g. missing permission) --
@@ -1313,8 +1304,9 @@ ddb-count table="":
   #!/usr/bin/env bash
   set -euo pipefail
   {{DDB_PICK}}
-  tbl="{{table}}"
-  [ -n "$tbl" ] || tbl=$({{DDB_TABLES}} | pick_or_type "table")
+  py="{{DDB_PYTHON}}"; builder="{{DDB_SCRIPT_DIR}}/create/dynamodb_builder.py"
+  {{DDB_ACCOUNT}}
+  choose_table "{{table}}" || exit 1
   [ -n "$tbl" ] || exit 0
 
   # ItemCount is free (refreshed roughly every 6 hours) and is usually enough.
@@ -1357,8 +1349,9 @@ ddb-scan table="" limit="20" cols="" full="false":
   #!/usr/bin/env bash
   set -euo pipefail
   {{DDB_PICK}}
-  tbl="{{table}}"
-  [ -n "$tbl" ] || tbl=$({{DDB_TABLES}} | pick_or_type "table")
+  py="{{DDB_PYTHON}}"; builder="{{DDB_SCRIPT_DIR}}/create/dynamodb_builder.py"
+  {{DDB_ACCOUNT}}
+  choose_table "{{table}}" || exit 1
   [ -n "$tbl" ] || exit 0
   # --limit (API-side) rather than --max-items (CLI-side): --max-items truncates
   # the printed items but leaves Count reporting the untruncated page, and adds a
@@ -1388,10 +1381,11 @@ ddb-query table="" index="" pk="" sk="" limit="20" cols="" full="false":
   #!/usr/bin/env bash
   set -euo pipefail
   {{DDB_PICK}}
+  py="{{DDB_PYTHON}}"; builder="{{DDB_SCRIPT_DIR}}/create/dynamodb_builder.py"
+  {{DDB_ACCOUNT}}
   base_marker="(base table)"
 
-  tbl="{{table}}"
-  [ -n "$tbl" ] || tbl=$({{DDB_TABLES}} | pick_or_type "table")
+  choose_table "{{table}}" || exit 1
   [ -n "$tbl" ] || exit 0
 
   # One describe-table call supplies both the index list and every key schema.
@@ -1481,8 +1475,9 @@ ddb-capacity table="" mode="":
   #!/usr/bin/env bash
   set -euo pipefail
   {{DDB_PICK}}
-  tbl="{{table}}"
-  [ -n "$tbl" ] || tbl=$({{DDB_TABLES}} | pick_or_type "table")
+  py="{{DDB_PYTHON}}"; builder="{{DDB_SCRIPT_DIR}}/create/dynamodb_builder.py"
+  {{DDB_ACCOUNT}}
+  choose_table "{{table}}" || exit 1
   [ -n "$tbl" ] || exit 0
   color=1; { [ -t 1 ] && [ -z "${NO_COLOR:-}" ]; } || color=0
 
@@ -1526,8 +1521,9 @@ ddb-ttl table="" attribute="" disable="false":
   #!/usr/bin/env bash
   set -euo pipefail
   {{DDB_PICK}}
-  tbl="{{table}}"
-  [ -n "$tbl" ] || tbl=$({{DDB_TABLES}} | pick_or_type "table")
+  py="{{DDB_PYTHON}}"; builder="{{DDB_SCRIPT_DIR}}/create/dynamodb_builder.py"
+  {{DDB_ACCOUNT}}
+  choose_table "{{table}}" || exit 1
   [ -n "$tbl" ] || exit 0
 
   cur=$(aws dynamodb describe-time-to-live --table-name "$tbl" \
@@ -1561,8 +1557,9 @@ ddb-export table="" bucket="" prefix="":
   #!/usr/bin/env bash
   set -euo pipefail
   {{DDB_PICK}}
-  tbl="{{table}}"
-  [ -n "$tbl" ] || tbl=$({{DDB_TABLES}} | pick_or_type "table")
+  py="{{DDB_PYTHON}}"; builder="{{DDB_SCRIPT_DIR}}/create/dynamodb_builder.py"
+  {{DDB_ACCOUNT}}
+  choose_table "{{table}}" || exit 1
   [ -n "$tbl" ] || exit 0
 
   pitr=$(aws dynamodb describe-continuous-backups --table-name "$tbl" \
@@ -1805,7 +1802,6 @@ _ddb-suggest name index="":
 # sysbench
 
 # hint: threads: concurrent threads (default: 4)
-# hint: time: test duration in seconds (default: 60)
 # hint: tables: number of test tables (default: 4)
 # hint: table_size: rows per table (default: 100000)
 # hint: db: target database/schema (default: sbtest)
@@ -1815,7 +1811,7 @@ sysbench-prepare threads="4" tables="4" table_size="100000" db="sbtest":
   set -euo pipefail
   HOSTS_FILE="{{HOSTS_FILE}}"
   selected=$(grep -v '^#' "$HOSTS_FILE" | grep -v '^$' | \
-    fzf --prompt="sysbench host> " --height=40% --scheme=default)
+    fzf --prompt="sysbench host> " --height=40% --scheme=default || true)
   [ -z "$selected" ] && exit 0
   host=$(echo "$selected" | cut -d: -f2)
   port=$(echo "$selected" | cut -d: -f3)
@@ -1844,7 +1840,7 @@ sysbench-run threads="4" time="60" tables="4" table_size="100000" db="sbtest":
   set -euo pipefail
   HOSTS_FILE="{{HOSTS_FILE}}"
   selected=$(grep -v '^#' "$HOSTS_FILE" | grep -v '^$' | \
-    fzf --prompt="sysbench host> " --height=40% --scheme=default)
+    fzf --prompt="sysbench host> " --height=40% --scheme=default || true)
   [ -z "$selected" ] && exit 0
   host=$(echo "$selected" | cut -d: -f2)
   port=$(echo "$selected" | cut -d: -f3)
@@ -1871,7 +1867,7 @@ sysbench-cleanup db="sbtest":
   set -euo pipefail
   HOSTS_FILE="{{HOSTS_FILE}}"
   selected=$(grep -v '^#' "$HOSTS_FILE" | grep -v '^$' | \
-    fzf --prompt="sysbench host> " --height=40% --scheme=default)
+    fzf --prompt="sysbench host> " --height=40% --scheme=default || true)
   [ -z "$selected" ] && exit 0
   host=$(echo "$selected" | cut -d: -f2)
   port=$(echo "$selected" | cut -d: -f3)
@@ -2062,7 +2058,7 @@ mysql-dump-users source_host source_user raw_sql="users_raw.sql" sanitized_sql="
   echo "  \$EDITOR \"$san_abs\""
   echo "  just mysql-import-users <target_host> <target_user>   # then pick the .sql via fzf"
 
-# hint: target_host: e.g. aurora-skt-otg-uat-cluster.cluster-czdk59pd0a4y.ap-northeast-2.rds.amazonaws.com
+# hint: target_host: e.g. <host from ~/.config/mysql/hosts>
 # hint: target_user: e.g. <db user>
 # note: input SQL is picked via fzf (searches current dir for *.sql); none found -> type path
 
@@ -2075,7 +2071,7 @@ mysql-import-users target_host target_user:
   mapfile -t sqls < <(find . -maxdepth 1 -type f -name '*.sql' 2>/dev/null | sed 's:^\./::' | sort)
   if [ "${#sqls[@]}" -gt 0 ]; then
     input_sql=$(printf '%s\n' "${sqls[@]}" | \
-      fzf --prompt="import sql> " --height=40% --scheme=default)
+      fzf --prompt="import sql> " --height=40% --scheme=default || true)
   else
     read -rp "sql file (경로 직접 입력): " input_sql
   fi
@@ -2233,7 +2229,7 @@ pt-osc alter execute="false" chunk_size="1000" chunk_index="PRIMARY" max_load="T
   set -euo pipefail
   HOSTS_FILE="{{HOSTS_FILE}}"
   selected=$(grep -v '^#' "$HOSTS_FILE" | grep -v '^$' | \
-    fzf --prompt="pt-osc host> " --height=40% --scheme=default)
+    fzf --prompt="pt-osc host> " --height=40% --scheme=default || true)
   [ -z "$selected" ] && exit 0
   host=$(echo "$selected" | cut -d: -f2)
   port=$(echo "$selected" | cut -d: -f3)
@@ -2245,14 +2241,14 @@ pt-osc alter execute="false" chunk_size="1000" chunk_index="PRIMARY" max_load="T
     "SELECT schema_name FROM information_schema.schemata \
      WHERE schema_name NOT IN ('mysql','sys','information_schema','performance_schema') \
      ORDER BY schema_name" | \
-    fzf --prompt="pt-osc schema> " --height=40% --scheme=default)
+    fzf --prompt="pt-osc schema> " --height=40% --scheme=default || true)
   [ -z "$database" ] && exit 0
 
   table=$(MYSQL_PWD="$pw" mysql -h "$host" -P "$port" -u "$user" -D "$database" -Nse \
     "SELECT table_name FROM information_schema.tables \
      WHERE table_schema=DATABASE() AND table_type='BASE TABLE' \
      ORDER BY table_name" \
-    | fzf --prompt="pt-osc table> " --height=60% --scheme=default)
+    | fzf --prompt="pt-osc table> " --height=60% --scheme=default || true)
   [ -z "$table" ] && exit 0
 
   cnf=$(mktemp)
@@ -2300,172 +2296,6 @@ pt-osc alter execute="false" chunk_size="1000" chunk_index="PRIMARY" max_load="T
     echo "mode   : DRY RUN - pass execute=true to apply"
   fi
   pt-online-schema-change "${args[@]}" D="$database",t="$table"
-
-# PostgreSQL (pg_dump / pg_restore)
-#
-# 요구사항: libpq client tools (brew install libpq  또는  postgresql@16).
-# 비밀번호는 mysqlsh 처럼 미지정 시 pg_dump/pg_restore 가 자동 프롬프트합니다
-# (또는 PGPASSWORD / ~/.pgpass 사용). PG 덤프는 인스턴스 전체가 아니라 DB 단위입니다.
-
-# hint: host: e.g. <pg host from ~/.config/mysql/hosts>
-# hint: user: e.g. <db user>
-# hint: database: target database (PG는 DB 단위 덤프)
-# hint: port: server port (default: 5432)
-# hint: threads: parallel jobs (default: 4)
-# hint: outdir: output directory (default: pgdump_<database>_<timestamp>)
-
-[group('postgres')]
-pg-dump-data host user database port="5432" threads="4" outdir="":
-  #!/usr/bin/env bash
-  set -euo pipefail
-  timestamp=$(date +%Y%m%d_%H%M%S)
-  out="{{outdir}}"
-  [ -z "$out" ] && out="pgdump_{{database}}_${timestamp}"
-  pg_dump --host="{{host}}" --port="{{port}}" --username="{{user}}" --dbname="{{database}}" \
-    --format=directory --jobs={{threads}} --no-sync --file="$out"
-  echo "Written: $out/"
-
-# hint: host: e.g. <pg host from ~/.config/mysql/hosts>
-# hint: user: e.g. <db user>
-# hint: database: target database
-# hint: tables: comma-separated table names (schema-qualified OK, e.g. public.t1,app.t2)
-# hint: port: server port (default: 5432)
-# hint: threads: parallel jobs (default: 4)
-# hint: outdir: output directory (default: pgdump_<database>_tables_<timestamp>)
-
-[group('postgres')]
-pg-dump-tables host user database tables port="5432" threads="4" outdir="":
-  #!/usr/bin/env bash
-  set -euo pipefail
-  timestamp=$(date +%Y%m%d_%H%M%S)
-  out="{{outdir}}"
-  [ -z "$out" ] && out="pgdump_{{database}}_tables_${timestamp}"
-  IFS=',' read -r -a raw_tbl_array <<< "{{tables}}"
-  [ "${#raw_tbl_array[@]}" -gt 0 ] || { echo "No tables provided" >&2; exit 1; }
-  tbl_args=()
-  for table in "${raw_tbl_array[@]}"; do
-    table=$(printf '%s' "$table" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')
-    [ -z "$table" ] && { echo "Empty table name in tables list" >&2; exit 1; }
-    tbl_args+=( --table="$table" )
-  done
-  pg_dump --host="{{host}}" --port="{{port}}" --username="{{user}}" --dbname="{{database}}" \
-    --format=directory --jobs={{threads}} --no-sync --file="$out" "${tbl_args[@]}"
-  echo "Written: $out/"
-
-# hint: host: e.g. <pg host from ~/.config/mysql/hosts>
-# hint: user: e.g. <db user>
-# hint: database: target database
-# hint: port: server port (default: 5432)
-# hint: threads: parallel jobs (default: 4)
-# hint: outdir: output directory (default: pgdump_<database>_nodata_<timestamp>)
-
-[group('postgres')]
-pg-dump-no-data host user database port="5432" threads="4" outdir="":
-  #!/usr/bin/env bash
-  set -euo pipefail
-  timestamp=$(date +%Y%m%d_%H%M%S)
-  out="{{outdir}}"
-  [ -z "$out" ] && out="pgdump_{{database}}_nodata_${timestamp}"
-  # No --jobs here: pg_dump parallelises data dumping, and --schema-only has no
-  # data to split, so the flag would do nothing.
-  pg_dump --host="{{host}}" --port="{{port}}" --username="{{user}}" --dbname="{{database}}" \
-    --format=directory --schema-only --no-sync --file="$out"
-  echo "Written: $out/"
-
-# hint: host: e.g. <pg host from ~/.config/mysql/hosts>
-# hint: user: e.g. <db user>
-# hint: database: target database to restore INTO (must already exist)
-# hint: indir: dump directory from pg-dump-data / pg-dump-tables
-# hint: port: server port (default: 5432)
-# hint: threads: parallel jobs (default: 4)
-# hint: on_exist: existing objects -> error (default, stop on error) | drop (--clean --if-exists) | ignore (continue past errors)
-# hint: no_owner: strip ownership/privileges -> true (default, RDS-safe) | false (preserve owners)
-
-[group('postgres')]
-[confirm("Load dump into " + database + " on " + host + "?")]
-pg-load host user database indir port="5432" threads="4" on_exist="error" no_owner="true":
-  #!/usr/bin/env bash
-  set -euo pipefail
-
-  restore_args=(
-    --host="{{host}}" --port="{{port}}" --username="{{user}}" --dbname="{{database}}"
-    --format=directory --jobs={{threads}}
-  )
-
-  case "{{on_exist}}" in
-    drop)     restore_args+=(--clean --if-exists) ;;
-    ignore)   ;;
-    error|"") restore_args+=(--exit-on-error) ;;
-    *) echo "on_exist must be one of: error | drop | ignore" >&2; exit 1 ;;
-  esac
-
-  case "{{no_owner}}" in
-    true|"")  restore_args+=(--no-owner --no-privileges) ;;
-    false)    ;;
-    *) echo "no_owner must be true or false" >&2; exit 1 ;;
-  esac
-
-  pg_restore "${restore_args[@]}" "{{indir}}"
-  echo "Loaded: {{indir}} into {{database}}"
-
-# hint: host/user/database/indir/port/threads/on_exist/no_owner: pg-load 와 동일
-# hint: maint_mem: 인덱스 빌드용 maintenance_work_mem (default: 1GB)
-#
-# pg-load + 세션 튜닝(PGOPTIONS) + 로드 후 ANALYZE. 대용량 복구용 opt-in.
-# 주의: 병렬(-j threads) 인덱스 빌드 구간에 워커당 maint_mem 만큼 메모리 사용
-#       (예: threads=4, maint_mem=1GB -> 피크 ~4GB). 타겟 RAM 보고 조절.
-# synchronous_commit=off 라 복구 중 크래시 시 재실행 필요(데이터 유실 걱정 X, 재적재).
-
-[group('postgres')]
-pg-load-fast host user database indir port="5432" threads="4" on_exist="error" no_owner="true" maint_mem="1GB":
-  #!/usr/bin/env bash
-  set -euo pipefail
-  export PGOPTIONS="-c maintenance_work_mem={{maint_mem}} -c synchronous_commit=off -c statement_timeout=0"
-  echo ">> PGOPTIONS=$PGOPTIONS"
-  just --justfile "{{justfile()}}" pg-load \
-    "{{host}}" "{{user}}" "{{database}}" "{{indir}}" "{{port}}" "{{threads}}" "{{on_exist}}" "{{no_owner}}"
-  echo ">> ANALYZE {{database}} ..."
-  psql --host="{{host}}" --port="{{port}}" --username="{{user}}" --dbname="{{database}}" -c "ANALYZE;"
-  echo "Fast-loaded + analyzed: {{indir}} into {{database}}"
-
-# hint: host: e.g. <pg host from ~/.config/mysql/hosts>
-# hint: user: e.g. <db user>
-# hint: port: server port (default: 5432)
-# hint: raw_sql: output file (default: pg_roles_<timestamp>.sql)
-#
-# 클러스터 전역 role/권한 덤프. --no-role-passwords 로 RDS(pg_authid 읽기 차단)에서도 동작.
-# 비밀번호는 덤프되지 않으므로 타겟에서 별도 설정 필요.
-
-[group('postgres')]
-pg-dump-roles host user port="5432" raw_sql="":
-  #!/usr/bin/env bash
-  set -euo pipefail
-  timestamp=$(date +%Y%m%d_%H%M%S)
-  out="{{raw_sql}}"
-  [ -z "$out" ] && out="pg_roles_${timestamp}.sql"
-  pg_dumpall --host="{{host}}" --port="{{port}}" --username="{{user}}" \
-    --roles-only --no-role-passwords > "$out"
-  echo "Written: $out"
-  echo ""
-  echo "== RDS-reserved / built-in roles (RDS import 전 제거 권장) =="
-  grep -nE 'rds_superuser|rds_replication|rds_iam|rds_password|rds_ad|rdsadmin|rdstopmgr|CREATE ROLE (pg_|rds)' "$out" || echo "  (none)"
-  echo ""
-  echo "Review $out, then run: just pg-import-roles <target_host> <target_user> $out"
-
-# hint: host: e.g. <pg host from ~/.config/mysql/hosts>
-# hint: user: e.g. <db user>
-# hint: input_sql: roles SQL from pg-dump-roles
-# hint: port: server port (default: 5432)
-# hint: database: maintenance DB to connect to (default: postgres)
-
-[group('postgres')]
-[confirm("Apply roles from " + input_sql + " to " + host + "?")]
-pg-import-roles host user input_sql port="5432" database="postgres":
-  #!/usr/bin/env bash
-  set -euo pipefail
-  psql --host="{{host}}" --port="{{port}}" --username="{{user}}" --dbname="{{database}}" \
-    -v ON_ERROR_STOP=0 -f "{{input_sql}}"
-  echo "Imported: {{input_sql}}"
 
 # AWS DMS
 
@@ -2618,7 +2448,7 @@ docker-exec:
   #!/usr/bin/env bash
   set -euo pipefail
   selected=$(docker ps --format "{{{{.ID}}}}\t{{{{.Names}}}}\t{{{{.Image}}}}\t{{{{.Status}}}}" | \
-    fzf --prompt="container> " --height=40% --scheme=default | awk '{print $1}')
+    fzf --prompt="container> " --height=40% --scheme=default | awk '{print $1}' || true)
   [ -z "$selected" ] && exit 0
   shell=$(docker exec "$selected" sh -c 'command -v bash || command -v sh' 2>/dev/null || echo "sh")
   docker exec -it "$selected" "$shell"
@@ -2630,7 +2460,7 @@ docker-logs lines="100":
   #!/usr/bin/env bash
   set -euo pipefail
   selected=$(docker ps -a --format "{{{{.ID}}}}\t{{{{.Names}}}}\t{{{{.Image}}}}\t{{{{.Status}}}}" | \
-    fzf --prompt="container> " --height=40% --scheme=default | awk '{print $1}')
+    fzf --prompt="container> " --height=40% --scheme=default | awk '{print $1}' || true)
   [ -z "$selected" ] && exit 0
   docker logs --tail={{lines}} -f "$selected"
 
@@ -2660,7 +2490,7 @@ docker-stop:
   #!/usr/bin/env bash
   set -euo pipefail
   selected=$(docker ps --format "{{{{.ID}}}}\t{{{{.Names}}}}\t{{{{.Image}}}}\t{{{{.Status}}}}" | \
-    fzf --prompt="stop container> " --height=40% --scheme=default --multi | awk '{print $1}')
+    fzf --prompt="stop container> " --height=40% --scheme=default --multi | awk '{print $1}' || true)
   [ -z "$selected" ] && exit 0
   echo "$selected" | xargs docker stop
   echo "stopped"
@@ -2671,7 +2501,7 @@ docker-rmi:
   #!/usr/bin/env bash
   set -euo pipefail
   selected=$(docker images --format "{{{{.Repository}}}}:{{{{.Tag}}}}\t{{{{.ID}}}}\t{{{{.Size}}}}" | \
-    fzf --prompt="remove image> " --height=40% --scheme=default --multi | awk '{print $2}')
+    fzf --prompt="remove image> " --height=40% --scheme=default --multi | awk '{print $2}' || true)
   [ -z "$selected" ] && exit 0
   echo "$selected" | xargs docker rmi
   echo "removed"
@@ -2720,7 +2550,7 @@ _rsync-impl direction dir:
   )
   picked=$(printf '%s\n' "$candidates" | \
     fzf --prompt="{{direction}} target> " --height=40% --scheme=default \
-        --delimiter=$'\t' --with-nth=1,2)
+        --delimiter=$'\t' --with-nth=1,2 || true)
   [ -z "$picked" ] && exit 0
 
   if [ "$picked" = "$manual_marker" ]; then
@@ -2729,7 +2559,7 @@ _rsync-impl direction dir:
     no_key="(ssh 기본 키)"
     key=$( { echo "$no_key"; for f in "$HOME"/.ssh/*; do
         [ -f "$f" ] && head -1 "$f" 2>/dev/null | grep -q 'PRIVATE KEY' && echo "$f"
-      done; } | fzf --prompt="key> " --height=40% --scheme=default)
+      done; } | fzf --prompt="key> " --height=40% --scheme=default || true)
     [ -z "$key" ] && exit 0
     [ "$key" = "$no_key" ] && key=""
     read -rp "기본 원격 디렉터리 [~]: " target_dir
