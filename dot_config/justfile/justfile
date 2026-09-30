@@ -283,6 +283,22 @@ pick_or_type() {
 }
 '''
 
+# DynamoDB 밖의 AWS 레시피용 계정 선택. [default] 자격증명이 없어서 AWS_PROFILE 없이
+# 돌리면 NoRegion·NoCredentials 로 죽었다. 목록은 aa 와 같이 ~/.aws/config 의 프로파일.
+AWS_ACCOUNT     := '''
+choose_aws_profile() {  # AWS_PROFILE 이 없으면 fzf 로 골라 export. Esc 면 non-zero
+  [ -n "${AWS_PROFILE:-}" ] && return 0
+  local p
+  p=$(sed -n 's/^\[profile[[:space:]]*\([^]]*\)\].*/\1/p' "$HOME/.aws/config" | sort -u | \
+      fzf --prompt="AWS 계정> " --height=40% --scheme=default || true)
+  [ -n "$p" ] || return 1
+  export AWS_PROFILE="$p"
+  AWS_DEFAULT_REGION=$(aws configure get region --profile "$p" 2>/dev/null || echo ap-northeast-2)
+  export AWS_DEFAULT_REGION
+  echo ">> AWS 계정: $AWS_PROFILE ($AWS_DEFAULT_REGION)" >&2
+}
+'''
+
 # 계정 선택. 레시피가 py="{{DDB_PYTHON}}" 와 builder="<...>/dynamodb_builder.py" 를 정한 뒤 끼워 넣는다.
 # 환경만 보고 계정을 정하면 틀린다 -- UAT 테이블이 prod 에 51개, nonprod 에 7개
 # (OnTheGoUat*, OnTheGoLoginObserveUAT) 있다. 그래서 환경마다 fzf 로 고르게 하고,
@@ -556,7 +572,15 @@ mysqlsh-load host user port="3306" threads="4" target_schema="" on_exist="error"
   # live output via tee and scan it for "ERROR: MYSQLSH nnnnn" as well.
   load_log=$(mktemp)
   trap 'rm -f "$load_log"' EXIT
-  printf '%s\n' "$pw" | mysqlsh --host="{{host}}" --port={{port}} --user="{{user}}" --passwords-from-stdin "${load_args[@]}" 2>&1 | tee "$load_log"
+  # 키체인에 있으면 표준입력으로 넘기고, 없으면 mysqlsh 가 직접 묻게 한다. 예전에는 pw 를
+  # 정의하지 않고 "$pw" 를 넘겨서, set -u 가 살아 있으면 여기서 "pw: unbound variable" 로
+  # 죽었다 (j 가 set -euo pipefail 을 지우던 때는 빈 비밀번호로 넘어갔다).
+  pw=$(security find-generic-password -s "mysql-db-connect" -a "{{user}}" -w 2>/dev/null || true)
+  if [ -n "$pw" ]; then
+    printf '%s\n' "$pw" | mysqlsh --host="{{host}}" --port={{port}} --user="{{user}}" --passwords-from-stdin "${load_args[@]}" 2>&1 | tee "$load_log"
+  else
+    mysqlsh --host="{{host}}" --port={{port}} --user="{{user}}" "${load_args[@]}" 2>&1 | tee "$load_log"
+  fi
   if grep -qE '^ERROR: ' "$load_log"; then
     echo "Load failed: $indir" >&2
     exit 1
@@ -817,12 +841,14 @@ mysql-slowlog cluster="" hours="24" digest="false":
   #!/usr/bin/env bash
   set -euo pipefail
   {{DDB_PICK}}
+  {{AWS_ACCOUNT}}
+  choose_aws_profile || exit 0
 
   cl="{{cluster}}"
   if [ -z "$cl" ]; then
     # Only clusters that actually export slowquery; the rest have no log group.
     cl=$(aws rds describe-db-clusters \
-      --query "DBClusters[?contains(EnabledCloudwatchLogsExports || [], 'slowquery')].DBClusterIdentifier" \
+      --query 'DBClusters[?contains(EnabledCloudwatchLogsExports || `[]`, `"slowquery"`)].DBClusterIdentifier' \
       --output text | tr '\t' '\n' | sort | pick_or_type "cluster")
     [ -n "$cl" ] || exit 0
   fi
@@ -858,17 +884,21 @@ mysql-audit-search value cluster="" hours="1" only_query="true":
   #!/usr/bin/env bash
   set -euo pipefail
   {{DDB_PICK}}
+  {{AWS_ACCOUNT}}
+  choose_aws_profile || exit 0
 
   cl="{{cluster}}"
   if [ -z "$cl" ]; then
     cl=$(aws rds describe-db-clusters \
-      --query "DBClusters[?contains(EnabledCloudwatchLogsExports || [], 'audit')].DBClusterIdentifier" \
+      --query 'DBClusters[?contains(EnabledCloudwatchLogsExports || `[]`, `"audit"`)].DBClusterIdentifier' \
       --output text | tr '\t' '\n' | sort | pick_or_type "cluster")
     [ -n "$cl" ] || exit 0
   fi
   lg="/aws/rds/cluster/$cl/audit"
   size=$(aws logs describe-log-groups --log-group-name-prefix "$lg" \
     --query 'logGroups[0].storedBytes' --output text 2>/dev/null || echo 0)
+  # 로그 그룹이 없으면 None 이 온다 -- 산술식에서 변수 이름으로 읽혀 set -u 에 걸린다.
+  [[ "$size" =~ ^[0-9]+$ ]] || size=0
   echo ">> $cl audit ($(( size / 1048576 )) MB stored), last {{hours}}h, pattern: {{value}}" >&2
 
   start=$(( ($(date +%s) - {{hours}} * 3600) * 1000 ))
@@ -1895,6 +1925,8 @@ sysbench-cleanup db="sbtest":
 aws-rds-list what="instances":
   #!/usr/bin/env bash
   set -euo pipefail
+  {{AWS_ACCOUNT}}
+  choose_aws_profile || exit 0
   color=1; { [ -t 1 ] && [ -z "${NO_COLOR:-}" ]; } || color=0
 
   if [ "{{what}}" = "clusters" ]; then
@@ -2425,12 +2457,18 @@ pt-osc alter execute="false" chunk_size="1000" chunk_index="PRIMARY" max_load="T
 
 # AWS DMS
 
-DMS_CLI := "cd " + DMSCTL_ROOT + "/cli && uv run dms"
+# DMS 태스크는 terraform 코드라 deploy 도 AWS 자격증명이 필요하다 (provider 에 profile 이
+# 없다). 계정을 잘못 고르면 그 계정 기준으로 plan 이 나오니 고른 계정을 꼭 확인할 것.
+# validate · clean 은 코드만 보므로 계정을 묻지 않는다.
+DMS_SETUP := AWS_ACCOUNT + "\nchoose_aws_profile || exit 0\ncd \"" + DMSCTL_ROOT + "/cli\""
 
 # DMS 전체 상태 (diff 기반: AWS vs 코드)
 [group('dms')]
 dms-status:
-  {{DMS_CLI}} status
+  #!/usr/bin/env bash
+  set -euo pipefail
+  {{DMS_SETUP}}
+  uv run dms status
 
 # hint: task: e.g. prod-finance / prod-dax-master (빈값이면 전체)
 # hint: source: dax / horizon / otg / soho (옵션)
@@ -2438,9 +2476,9 @@ dms-status:
 dms-diff task="" source="":
   #!/usr/bin/env bash
   set -euo pipefail
-  cd "{{DMSCTL_ROOT}}/cli"
+  {{DMS_SETUP}}
   if [ -n "{{task}}" ] && [ -n "{{source}}" ]; then
-    uv run dms diff "{{task}}" --source "{{source}}"
+    uv run dms diff --source "{{source}}" "{{task}}"
   elif [ -n "{{task}}" ]; then
     uv run dms diff "{{task}}"
   elif [ -n "{{source}}" ]; then
@@ -2449,16 +2487,18 @@ dms-diff task="" source="":
     uv run dms diff
   fi
 
+# diff·sync·generate 는 TASK 뒤에 서브커맨드 자리가 있어서 (dms sync [OPTIONS] TASK COMMAND)
+# TASK 뒤의 --dry-run 을 서브커맨드로 읽고 실패한다. 옵션은 TASK 앞에 둔다.
 # hint: task: e.g. prod-finance / all
 [group('dms')]
 dms-sync task dry_run="true":
   #!/usr/bin/env bash
   set -euo pipefail
-  cd "{{DMSCTL_ROOT}}/cli"
+  {{DMS_SETUP}}
   if [ "{{dry_run}}" = "true" ]; then
-    uv run dms sync {{task}} --dry-run
+    uv run dms sync --dry-run "{{task}}"
   else
-    uv run dms sync {{task}} --force
+    uv run dms sync --force "{{task}}"
   fi
 
 # hint: target: e.g. prod-finance / horizon / all
@@ -2467,11 +2507,11 @@ dms-sync task dry_run="true":
 dms-deploy target plan="false":
   #!/usr/bin/env bash
   set -euo pipefail
-  cd "{{DMSCTL_ROOT}}/cli"
+  {{DMS_SETUP}}
   if [ "{{plan}}" = "true" ]; then
-    uv run dms deploy {{target}} --plan
+    uv run dms deploy --plan "{{target}}"
   else
-    uv run dms deploy {{target}}
+    uv run dms deploy "{{target}}"
   fi
 
 # hint: task: e.g. new-task-name
@@ -2482,39 +2522,54 @@ dms-deploy target plan="false":
 dms-generate task source tables="" from_aws="":
   #!/usr/bin/env bash
   set -euo pipefail
-  cd "{{DMSCTL_ROOT}}/cli"
+  {{DMS_SETUP}}
   if [ -n "{{from_aws}}" ]; then
-    uv run dms generate "{{task}}" --source "{{source}}" --from-aws "{{from_aws}}"
+    uv run dms generate --source "{{source}}" --from-aws "{{from_aws}}" "{{task}}"
   else
-    uv run dms generate "{{task}}" --source "{{source}}" --tables "{{tables}}"
+    uv run dms generate --source "{{source}}" --tables "{{tables}}" "{{task}}"
   fi
 
 # hint: task: e.g. prod-finance
 # hint: table: e.g. NEW_TABLE
 [group('dms')]
 dms-table-add task table:
-  {{DMS_CLI}} tables add "{{task}}" "{{table}}"
+  #!/usr/bin/env bash
+  set -euo pipefail
+  {{DMS_SETUP}}
+  uv run dms tables add "{{task}}" "{{table}}"
 
 # hint: task: e.g. prod-finance
 # hint: table: e.g. OLD_TABLE
 [group('dms')]
 dms-table-remove task table:
-  {{DMS_CLI}} tables remove "{{task}}" "{{table}}"
+  #!/usr/bin/env bash
+  set -euo pipefail
+  {{DMS_SETUP}}
+  uv run dms tables remove "{{task}}" "{{table}}"
 
 # hint: task: e.g. prod-finance
 [group('dms')]
 dms-table-list task:
-  {{DMS_CLI}} tables list "{{task}}"
+  #!/usr/bin/env bash
+  set -euo pipefail
+  {{DMS_SETUP}}
+  uv run dms tables list "{{task}}"
 
 # hint: task: e.g. prod-finance / all
 [group('dms')]
 dms-stop task:
-  {{DMS_CLI}} task stop {{task}}
+  #!/usr/bin/env bash
+  set -euo pipefail
+  {{DMS_SETUP}}
+  uv run dms task stop "{{task}}"
 
 # hint: task: e.g. prod-finance / all
 [group('dms')]
 dms-resume task:
-  {{DMS_CLI}} task resume {{task}}
+  #!/usr/bin/env bash
+  set -euo pipefail
+  {{DMS_SETUP}}
+  uv run dms task resume "{{task}}"
 
 # hint: task: e.g. prod-finance (빈값이면 전체)
 # hint: source: dax / horizon / otg / soho (옵션)
@@ -2522,7 +2577,7 @@ dms-resume task:
 dms-task-status task="" source="":
   #!/usr/bin/env bash
   set -euo pipefail
-  cd "{{DMSCTL_ROOT}}/cli"
+  {{DMS_SETUP}}
   if [ -n "{{task}}" ] && [ -n "{{source}}" ]; then
     uv run dms task status "{{task}}" --source "{{source}}"
   elif [ -n "{{task}}" ]; then
@@ -2536,14 +2591,17 @@ dms-task-status task="" source="":
 # hint: task: e.g. prod-finance
 [group('dms')]
 dms-table-status task:
-  {{DMS_CLI}} task table-status {{task}}
+  #!/usr/bin/env bash
+  set -euo pipefail
+  {{DMS_SETUP}}
+  uv run dms task table-status "{{task}}"
 
 # hint: source: dax / horizon / otg / soho (옵션, 빈값이면 전체)
 [group('dms')]
 dms-stats source="":
   #!/usr/bin/env bash
   set -euo pipefail
-  cd "{{DMSCTL_ROOT}}/cli"
+  {{DMS_SETUP}}
   if [ -n "{{source}}" ]; then
     uv run dms task stats --source "{{source}}"
   else
@@ -2552,7 +2610,7 @@ dms-stats source="":
 
 [group('dms')]
 dms-validate:
-  {{DMS_CLI}} validate
+  cd "{{DMSCTL_ROOT}}/cli" && uv run dms validate
 
 # hint: source: dax / horizon / otg / soho (옵션, 빈값이면 전체)
 [group('dms')]
