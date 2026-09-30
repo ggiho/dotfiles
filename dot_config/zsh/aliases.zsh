@@ -85,7 +85,6 @@ alias gre='git reset'
 if [[ -d "$ASURION_HOME" ]]; then
 # just
 export JUSTFILE="${JUSTFILE:-$HOME/.config/justfile/justfile}"
-export DMSCTL_ROOT="${DMSCTL_ROOT:-$HOME/src/github.com/ggiho/dmsctl}"
 export DDB_SCRIPT_DIR="$HOME/10_Database/AWS/dynamodb"
 alias vj="vi $JUSTFILE"
 unalias j 2>/dev/null

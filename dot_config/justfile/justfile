@@ -2,6 +2,17 @@
 # A record of what the history does and does not show being used, so the next
 # cleanup does not have to redo the analysis. Removed on 2026-09-29: the pg-*
 # recipes (see below) and the commented-out mysql-dump-data / -no-data.
+# Removed on 2026-09-30: the 15 dms-* recipes. Every prod DMS task was renamed on
+# 2026-07-06 (prod-<name> -> <name>-prod, see CloudTrail) while dmsctl's code and
+# local terraform state kept the old ids, so dms-deploy planned to create
+# duplicates of running tasks. DMS is managed in db-portal now.
+#
+# db-portal (~/src/github.com/ggiho/db-portal) is the default path for changes
+# that should leave an approval/audit trail: DB accounts, DynamoDB tables, DMS,
+# schema/config diffs. mysql-create-user, ddb-create/-add-gsi/-copy/-capacity/
+# -ttl and mysql-checksum/-config-diff stay here as the CLI fallback for when the
+# portal is down. What only lives here: mysqlsh dump/load, user dump/import,
+# binlog, pt-osc, redshift-*, rsync/ssh, sysbench, docker.
 #
 # Judged by how often the underlying command was run, NOT by recipe name -- the
 # `j` wrapper only started recording recipe names on 2026-08-31, and matching
@@ -22,11 +33,6 @@
 #                                               git/chezmoi, so removal is final
 #
 # Used, but not through these recipes:
-#   dms-*      `uv run dms` run 16x by hand (diff 13, tables 4, status 1);
-#              11 of the 15 dms recipes cover subcommands never invoked.
-#              If they fail with "no such directory": a long-lived tmux server can
-#              hold a stale DMSCTL_ROOT that beats the default in aliases.zsh --
-#              tmux set-environment -gu DMSCTL_ROOT (cleared 2026-09-29)
 #   docker-*   docker run 186x, but as ps 91 / compose 43 / start 13 / run 8;
 #              the recipes cover exec/logs/stats/clean/stop/rmi instead
 #   mysql-binlog-*   mysqlbinlog run 5x by hand; the Keychain fix on 2026-09-01
@@ -37,8 +43,8 @@
 #
 # By recipe name (j history 2026-08-31 .. 09-29): most used mysql-dump-users 6,
 #   ddb-describe 6, ddb-add-gsi 6, ddb-create 5, mysqlsh-load 4, mysql-import-users 4.
-#   Never used by name: docker-* 6, sysbench-* 3, dms-* 15, tunnel-* 2, the rds
-#   module 12 -- kept: the first two are cheap, dms/tunnel are used by hand.
+#   Never used by name: docker-* 6, sysbench-* 3, tunnel-* 2, the rds module 12
+#   -- kept: the first two are cheap, tunnel is used by hand.
 #   Recipes added or renamed in September (rsync-*, mysqlsh-dump, ddb-copy-data)
 #   have not had time to show up.
 # ─────────────────────────────────────────────────────────────────────────────
@@ -48,7 +54,6 @@ HOSTS_FILE      := "$HOME/.config/mysql/hosts"
 RSYNC_TARGETS   := "$HOME/.config/rsync/targets"
 SANITIZE_SCRIPT := "$HOME/.config/mysql/sanitize_users.py"
 DDB_SCRIPT_DIR  := env_var_or_default("DDB_SCRIPT_DIR", env_var("HOME") + "/10_Database/AWS/dynamodb")
-DMSCTL_ROOT     := env_var_or_default("DMSCTL_ROOT", env_var("HOME") + "/src/github.com/ggiho/dmsctl")
 # Table name list for the ddb-* pickers; ddb-describe and ddb-count both need it.
 DDB_TABLES      := 'aws dynamodb list-tables --query "TableNames[]" --output text | tr "\t" "\n"'
 
@@ -283,7 +288,7 @@ pick_or_type() {
 }
 '''
 
-# DynamoDB 밖의 AWS 레시피용 계정 선택. [default] 자격증명이 없어서 AWS_PROFILE 없이
+# DynamoDB 밖의 AWS 레시피용 계정 선택 (aws-rds-list, mysql-slowlog, mysql-audit-search). [default] 자격증명이 없어서 AWS_PROFILE 없이
 # 돌리면 NoRegion·NoCredentials 로 죽었다. 목록은 aa 와 같이 ~/.aws/config 의 프로파일.
 AWS_ACCOUNT     := '''
 choose_aws_profile() {  # AWS_PROFILE 이 없으면 fzf 로 골라 export. Esc 면 non-zero
@@ -2454,175 +2459,6 @@ pt-osc alter execute="false" chunk_size="1000" chunk_index="PRIMARY" max_load="T
     echo "mode   : DRY RUN - pass execute=true to apply"
   fi
   pt-online-schema-change "${args[@]}" D="$database",t="$table"
-
-# AWS DMS
-
-# DMS 태스크는 terraform 코드라 deploy 도 AWS 자격증명이 필요하다 (provider 에 profile 이
-# 없다). 계정을 잘못 고르면 그 계정 기준으로 plan 이 나오니 고른 계정을 꼭 확인할 것.
-# validate · clean 은 코드만 보므로 계정을 묻지 않는다.
-DMS_SETUP := AWS_ACCOUNT + "\nchoose_aws_profile || exit 0\ncd \"" + DMSCTL_ROOT + "/cli\""
-
-# DMS 전체 상태 (diff 기반: AWS vs 코드)
-[group('dms')]
-dms-status:
-  #!/usr/bin/env bash
-  set -euo pipefail
-  {{DMS_SETUP}}
-  uv run dms status
-
-# hint: task: e.g. prod-finance / prod-dax-master (빈값이면 전체)
-# hint: source: dax / horizon / otg / soho (옵션)
-[group('dms')]
-dms-diff task="" source="":
-  #!/usr/bin/env bash
-  set -euo pipefail
-  {{DMS_SETUP}}
-  if [ -n "{{task}}" ] && [ -n "{{source}}" ]; then
-    uv run dms diff --source "{{source}}" "{{task}}"
-  elif [ -n "{{task}}" ]; then
-    uv run dms diff "{{task}}"
-  elif [ -n "{{source}}" ]; then
-    uv run dms diff --source "{{source}}"
-  else
-    uv run dms diff
-  fi
-
-# diff·sync·generate 는 TASK 뒤에 서브커맨드 자리가 있어서 (dms sync [OPTIONS] TASK COMMAND)
-# TASK 뒤의 --dry-run 을 서브커맨드로 읽고 실패한다. 옵션은 TASK 앞에 둔다.
-# hint: task: e.g. prod-finance / all
-[group('dms')]
-dms-sync task dry_run="true":
-  #!/usr/bin/env bash
-  set -euo pipefail
-  {{DMS_SETUP}}
-  if [ "{{dry_run}}" = "true" ]; then
-    uv run dms sync --dry-run "{{task}}"
-  else
-    uv run dms sync --force "{{task}}"
-  fi
-
-# hint: target: e.g. prod-finance / horizon / all
-[group('dms')]
-[confirm("Deploy DMS task " + target + " for real (plan=" + plan + ")?")]
-dms-deploy target plan="false":
-  #!/usr/bin/env bash
-  set -euo pipefail
-  {{DMS_SETUP}}
-  if [ "{{plan}}" = "true" ]; then
-    uv run dms deploy --plan "{{target}}"
-  else
-    uv run dms deploy "{{target}}"
-  fi
-
-# hint: task: e.g. new-task-name
-# hint: source: dax / horizon / otg / soho
-# hint: tables: e.g. TABLE1,TABLE2 (또는 --from-aws 사용시 빈값)
-# hint: from_aws: 기존 AWS task ID에서 import (빈값이면 tables 사용)
-[group('dms')]
-dms-generate task source tables="" from_aws="":
-  #!/usr/bin/env bash
-  set -euo pipefail
-  {{DMS_SETUP}}
-  if [ -n "{{from_aws}}" ]; then
-    uv run dms generate --source "{{source}}" --from-aws "{{from_aws}}" "{{task}}"
-  else
-    uv run dms generate --source "{{source}}" --tables "{{tables}}" "{{task}}"
-  fi
-
-# hint: task: e.g. prod-finance
-# hint: table: e.g. NEW_TABLE
-[group('dms')]
-dms-table-add task table:
-  #!/usr/bin/env bash
-  set -euo pipefail
-  {{DMS_SETUP}}
-  uv run dms tables add "{{task}}" "{{table}}"
-
-# hint: task: e.g. prod-finance
-# hint: table: e.g. OLD_TABLE
-[group('dms')]
-dms-table-remove task table:
-  #!/usr/bin/env bash
-  set -euo pipefail
-  {{DMS_SETUP}}
-  uv run dms tables remove "{{task}}" "{{table}}"
-
-# hint: task: e.g. prod-finance
-[group('dms')]
-dms-table-list task:
-  #!/usr/bin/env bash
-  set -euo pipefail
-  {{DMS_SETUP}}
-  uv run dms tables list "{{task}}"
-
-# hint: task: e.g. prod-finance / all
-[group('dms')]
-dms-stop task:
-  #!/usr/bin/env bash
-  set -euo pipefail
-  {{DMS_SETUP}}
-  uv run dms task stop "{{task}}"
-
-# hint: task: e.g. prod-finance / all
-[group('dms')]
-dms-resume task:
-  #!/usr/bin/env bash
-  set -euo pipefail
-  {{DMS_SETUP}}
-  uv run dms task resume "{{task}}"
-
-# hint: task: e.g. prod-finance (빈값이면 전체)
-# hint: source: dax / horizon / otg / soho (옵션)
-[group('dms')]
-dms-task-status task="" source="":
-  #!/usr/bin/env bash
-  set -euo pipefail
-  {{DMS_SETUP}}
-  if [ -n "{{task}}" ] && [ -n "{{source}}" ]; then
-    uv run dms task status "{{task}}" --source "{{source}}"
-  elif [ -n "{{task}}" ]; then
-    uv run dms task status "{{task}}"
-  elif [ -n "{{source}}" ]; then
-    uv run dms task status --source "{{source}}"
-  else
-    uv run dms task status
-  fi
-
-# hint: task: e.g. prod-finance
-[group('dms')]
-dms-table-status task:
-  #!/usr/bin/env bash
-  set -euo pipefail
-  {{DMS_SETUP}}
-  uv run dms task table-status "{{task}}"
-
-# hint: source: dax / horizon / otg / soho (옵션, 빈값이면 전체)
-[group('dms')]
-dms-stats source="":
-  #!/usr/bin/env bash
-  set -euo pipefail
-  {{DMS_SETUP}}
-  if [ -n "{{source}}" ]; then
-    uv run dms task stats --source "{{source}}"
-  else
-    uv run dms task stats
-  fi
-
-[group('dms')]
-dms-validate:
-  cd "{{DMSCTL_ROOT}}/cli" && uv run dms validate
-
-# hint: source: dax / horizon / otg / soho (옵션, 빈값이면 전체)
-[group('dms')]
-dms-clean source="":
-  #!/usr/bin/env bash
-  set -euo pipefail
-  cd "{{DMSCTL_ROOT}}/cli"
-  if [ -n "{{source}}" ]; then
-    uv run dms clean --source "{{source}}"
-  else
-    uv run dms clean
-  fi
 
 # Docker
 
