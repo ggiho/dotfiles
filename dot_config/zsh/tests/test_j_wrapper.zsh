@@ -4,6 +4,16 @@ set -eu
 TEST_ALIASES=${TEST_ALIASES:-$HOME/.config/zsh/aliases.zsh}
 TEST_JUSTFILE=${TEST_JUSTFILE:-$HOME/.config/justfile/justfile}
 
+# j builds its host picker from MYSQL_HOSTS_FILE. Point it at a fixture, not the real
+# ~/.config/mysql/hosts: this file is published, the real list is internal hostnames,
+# and a fixture keeps the picker cases passing on machines without a hosts file.
+# Two entries with different users, and the cases pick the second, so "user comes
+# from the picked entry" cannot pass by falling back to the first entry's user.
+TEST_HOSTS_FILE=$(mktemp)
+print -r -- 'Example PROD:db-prod.example.internal:3306:produser' > "$TEST_HOSTS_FILE"
+print -r -- 'Example DEV:db-dev.example.internal:3306:devuser' >> "$TEST_HOSTS_FILE"
+export MYSQL_HOSTS_FILE=$TEST_HOSTS_FILE
+
 typeset -ga __vared_prompts
 typeset -gA __prompt_answers
 # Answers consumed in prompt order. Prefer this over keying on the exact prompt
@@ -23,7 +33,9 @@ cleanup() {
   fi
   return 0
 }
-trap cleanup EXIT
+# reset_mocks calls cleanup before every case, so the hosts fixture (shared by all
+# cases) is removed only here, on exit.
+trap 'cleanup; rm -f "$TEST_HOSTS_FILE"' EXIT
 
 reset_mocks() {
   cleanup
@@ -266,7 +278,7 @@ run_passthrough_quoting_case() {
 # "" for any prompt, which j treats as "accept the default". That keeps them from
 # breaking every time a hint's wording changes.
 MYSQLSH_LOAD_SIG='mysqlsh-load host user port="3306" threads="4" target_schema="" on_exist="error" force_drop="false"'
-PICKED_HOST='OnTheGo DEV  →  aurora-dev.otg.apac.npr.aws.asurion.net'
+PICKED_HOST='Example DEV  →  db-dev.example.internal'
 
 run_confirm_accepted_case() {
   reset_mocks
@@ -280,9 +292,9 @@ run_confirm_accepted_case() {
   assert_contains "$__history" 'mysqlsh-load' 'accepted confirm records history'
   assert_eq "$__atuin_cmd" "$__history" 'accepted confirm records to atuin'
   # Picking from the host list must yield the bare host, not the whole label.
-  assert_contains "$__buffer" '--host="aurora-dev.otg.apac.npr.aws.asurion.net"' 'host extracted from the picker label'
-  assert_contains "$__buffer" '--user="giho.seong"' 'user taken from the picked host entry'
-  assert_eq "${__buffer##*OnTheGo DEV*}" "$__buffer" 'label text does not leak into the command'
+  assert_contains "$__buffer" '--host="db-dev.example.internal"' 'host extracted from the picker label'
+  assert_contains "$__buffer" '--user="devuser"' 'user taken from the picked host entry'
+  assert_eq "${__buffer##*Example DEV*}" "$__buffer" 'label text does not leak into the command'
 }
 
 run_confirm_declined_case() {
