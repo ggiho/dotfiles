@@ -40,7 +40,7 @@ jq \
         then map(.hooks |= ((. // []) | map(if .command == $cmd then . + $extra else . end)))
         else . + [{hooks: [({type: "command", command: $cmd} + $extra)]}]
         end);
-    ensure("UserPromptSubmit"; $start; {timeout: 5})
+    ensure("UserPromptSubmit"; $start; {async: true, timeout: 15})
   | ensure("Stop";             $stop;  {async: true, timeout: 15})
   | ensure("Notification";     $ask;   {async: true, timeout: 15})
   | ensure("StopFailure";      $fail;  {async: true, timeout: 15})

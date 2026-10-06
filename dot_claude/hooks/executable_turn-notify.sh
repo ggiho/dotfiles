@@ -55,12 +55,20 @@ IDLE_MSG="Claude is waiting for your input"
 mode="${1:-stop}"
 
 if [ "$mode" = watch ]; then payload=""; session="${2:-nosession}"
+elif [ "$mode" = start ]; then
+  # Runs on every prompt you send. On a loaded machine each process it starts costs a
+  # noticeable fraction of a second (1.8s with load ~30 and swap nearly full), so take
+  # everything start needs in one jq straight from stdin: the session and the first
+  # characters of the prompt, enough to tell a <task-notification> from your own text.
+  payload=""
+  IFS=$'\t' read -r session lead < <(jq -r '[(.session_id // ""),
+      ((.prompt // .message // "") | sub("^\\s+"; "") | .[0:40])] | @tsv' 2>/dev/null)
 else
   payload=$(cat 2>/dev/null || true)
   session=$(printf '%s' "$payload" | jq -r '.session_id // empty' 2>/dev/null || true)
 fi
 [ -n "$session" ] || session=nosession
-session=$(printf '%s' "$session" | tr -c 'A-Za-z0-9._-' '_')
+session=${session//[!A-Za-z0-9._-]/_}
 
 # per-session state
 turns="$STATE_DIR/$session.t"          # one file per turn begun and not yet ended: .t.EPOCH.PID
@@ -72,7 +80,7 @@ carry="$STATE_DIR/$session.carry"      # your prompt, held across woken turns: s
 req="$STATE_DIR/$session.req"          # when you typed the request not yet announced: epoch
 held="$STATE_DIR/$session.held"        # parked for background work: armed_at
 sent="$STATE_DIR/$session.sent"        # delivered notice, for the recap swap
-mkdir -p "$STATE_DIR" 2>/dev/null
+[ -d "$STATE_DIR" ] || mkdir -p "$STATE_DIR" 2>/dev/null
 
 log() {
   printf '%s [%s %s] %s\n' "$(date '+%F %T')" "${session:0:8}" "$mode" "$1" >> "$LOG" 2>/dev/null
@@ -93,10 +101,6 @@ humanize() {
 # Turn starts are kept one file per turn. With a single stamp, a queued <task-notification>
 # could start the next turn (UserPromptSubmit is synchronous) before the previous turn's
 # asynchronous Stop hook read the stamp — and that Stop would take the new turn's start.
-turn_begin() {  # turn_begin new|cont — a prompt you typed forgets any unfinished turn
-  [ "$1" = new ] && rm -f "$turns".* 2>/dev/null
-  : > "$turns.$(date +%s).$$"
-}
 turn_take() {  # the start epoch of the turn this Stop ends, which it closes
   # This turn is the newest one that did not begin in the last 2s: a start younger than
   # that is the next turn, queued behind this one's asynchronous Stop. Anything older is
@@ -340,21 +344,26 @@ deliver_now() {  # deliver_now CLAIM [RECAP] — hand a claimed notice to ask mo
 # ---------------------------------------------------------------- lifecycle
 case "$mode" in
   start)
-    prompt=$(field '.prompt // .message')
     # Background work reporting back continues your request; anything you typed starts new
-    # work. Only a leading tag counts — a prompt that merely quotes one (a pasted log) is yours.
-    lead=${prompt#"${prompt%%[![:space:]]*}"}
-    case "$lead" in "<task-notification>"*) cont=1 ;; *) cont=0 ;; esac
-    if [ "$cont" = 1 ]; then turn_begin cont; else turn_begin new; date +%s > "$req"; fi
-    rm -f "$legacy_stamp"
-    if [ -f "$pending" ]; then
-      rm -f "$pending"
+    # work. Only a leading tag counts — a prompt that merely quotes one (a pasted log) is
+    # yours. ($lead is the prompt's start, leading whitespace dropped, read above.)
+    case "${lead:-}" in "<task-notification>"*) cont=1 ;; *) cont=0 ;; esac
+    now=$(date +%s)
+    had_pending=0; [ -f "$pending" ] && had_pending=1
+    # A new turn takes over whatever was armed, parked, or waiting for its recap (one rm for
+    # all of it). A prompt you typed also forgets unfinished turns and the carried request,
+    # and opens a new request.
+    if [ "$cont" = 1 ]; then
+      rm -f "$legacy_stamp" "$pending" "$sent" "$held"
+    else
+      rm -f "$turns".* "$legacy_stamp" "$pending" "$sent" "$held" "$carry"
+      printf '%s\n' "$now" > "$req"
+    fi
+    : > "$turns.$now.$$"
+    if [ "$had_pending" = 1 ]; then
       if [ "$cont" = 1 ]; then log "disarmed (background task reported back)"
       else log "disarmed (new prompt)"; fi
     fi
-    # a new turn takes over whatever was parked or waiting for its recap
-    rm -f "$sent" "$held"
-    [ "$cont" = 1 ] || rm -f "$carry"
     exit 0 ;;
 
   probe)
