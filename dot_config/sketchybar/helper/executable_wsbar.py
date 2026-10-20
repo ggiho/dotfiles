@@ -14,12 +14,14 @@ per change, so everything changes at the same moment.
 
 Set WSBAR_DRYRUN=1 to log the sketchybar calls instead of sending them.
 """
+import fcntl
 import json
 import os
 import queue
 import re
 import signal
 import subprocess
+import sys
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -41,7 +43,7 @@ GUARD_GAP = 2.0                 # at most one corrective focus per this many sec
 UID = os.getuid()
 DRYRUN = bool(os.environ.get("WSBAR_DRYRUN"))
 DEBUG = os.path.exists("/tmp/wsbar-debug-on")      # touch this file to log every event and decision
-PIDFILE = "/tmp/wsbar.%d.pid" % UID
+PIDFILE = "/tmp/wsbar.%d.pid" % UID      # also the lock file: the running instance holds a flock on it
 LOGFILE = "/tmp/wsbar.%d.log" % UID
 SHAKE_LOG = "/tmp/sketchybar-ws-apps.shake.log"
 
@@ -574,18 +576,41 @@ class Daemon:
         self.loop()
 
 
-def main():
-    if not DRYRUN:
-        # one instance only: replace an older one
+def take_lock(replace):
+    """One instance only, race-free: whoever holds the flock on PIDFILE is the instance. With
+    `replace` an older instance is asked to quit and this one takes over; without it this one
+    just gives up. (Checking a pid file and then writing it let two starts that happen at the
+    same moment both win.) Returns the open file, which must stay open for the process lifetime."""
+    f = open(PIDFILE, "a+")
+    deadline = time.time() + 3.0
+    asked = None
+    while True:
         try:
-            old = int(open(PIDFILE).read().strip())
-            if old != os.getpid() and "wsbar.py" in run(["/bin/ps", "-p", str(old), "-o", "command="]):
+            fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            break
+        except OSError:
+            if not replace or time.time() > deadline:
+                sys.exit(0)
+            f.seek(0)
+            try:
+                old = int(f.read().strip())
+            except ValueError:
+                old = None            # the holder has locked but not written its pid yet
+            if old and old != asked and "wsbar.py" in run(["/bin/ps", "-p", str(old), "-o", "command="]):
                 os.kill(old, signal.SIGTERM)
-                time.sleep(0.3)
-        except Exception:
-            pass
-        with open(PIDFILE, "w") as f:
-            f.write(str(os.getpid()))
+                asked = old
+            time.sleep(0.05)
+    f.seek(0)
+    f.truncate()
+    f.write(str(os.getpid()))
+    f.flush()
+    return f
+
+
+def main():
+    lock = None
+    if not DRYRUN:
+        lock = take_lock(replace="--keep" not in sys.argv)
     log("wsbar started (dryrun=%s)" % DRYRUN)
     Daemon().run()
 
