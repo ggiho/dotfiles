@@ -1,0 +1,272 @@
+# AeroSpace config (chezmoi template: dot_config/aerospace/aerospace.toml.tmpl).
+#
+# Keys: alt = go there, alt-cmd = take the window along. Focus keys (alt-hjkl) are only active in
+# 'main'; the terminal workspace uses the 'term' mode (see sync-mode.sh) so tmux gets alt-hjkl.
+# The SketchyBar side is helper/wsbar.py, which receives AeroSpace events via `aerospace subscribe`.
+#
+# The monitor layout differs per machine and is templated below: the work Mac (two externals plus
+# the notched MacBook screen) gets its own values, every other host keeps the single-external layout.
+# On the work Mac set `work = true` under [data] in ~/.config/chezmoi/chezmoi.toml.
+{{- /* work = true is set per machine under [data] in ~/.config/chezmoi/chezmoi.toml (never tracked) */ -}}
+{{- $work := false }}{{- if hasKey . "work" }}{{- $work = .work }}{{- end }}
+
+config-version = 2
+start-at-login = true
+
+# Pick the binding mode for this workspace. (The bar needs no callback: helper/wsbar.py in the
+# SketchyBar config receives AeroSpace events directly through `aerospace subscribe`.)
+exec-on-workspace-change = ['/bin/bash', '-c',
+    '$HOME/.config/aerospace/sync-mode.sh'
+]
+after-startup-command = ['exec-and-forget $HOME/.config/aerospace/sync-mode.sh']
+
+{{- if not $work }}
+
+# Switching displays re-centers the mouse on the newly focused monitor
+on-focused-monitor-changed = ['move-mouse monitor-lazy-center']
+{{- end }}
+
+# Keep workspaces 1-4 alive even when empty so they match the SketchyBar items
+persistent-workspaces = ['1', '2', '3', '4']
+
+enable-normalization-flatten-containers = true
+enable-normalization-opposite-orientation-for-nested-containers = true
+
+accordion-padding = 0
+default-root-container-layout = 'tiles'
+default-root-container-orientation = 'auto'
+
+[key-mapping]
+preset = 'qwerty'
+{{ if $work }}
+# Work PC: 1 (browser) on the left external, 2 (terminal) on the right external,
+# 3 (work tools) and 4 (messengers) on the MacBook screen. Numbers are monitor
+# sequence numbers from left to right; each falls back when a monitor is missing.
+[workspace-to-monitor-force-assignment]
+'1' = [1, 'main']
+'2' = [3, 'secondary', 'main']
+'3' = ['built-in', 'main']
+'4' = ['built-in', 'main']
+{{- else }}
+# Workspace 4 (messengers) goes to the MacBook screen when open, else a secondary, else main
+[workspace-to-monitor-force-assignment]
+'1' = 'main'
+'2' = 'main'
+'3' = 'main'
+'4' = ['built-in', 'secondary', 'main']
+{{- end }}
+
+[gaps]
+inner.horizontal = 8
+inner.vertical = 8
+outer.left = 8
+outer.bottom = 8
+{{- if $work }}
+# The notched built-in screen already loses 28pt from its visible frame, so use 10 there (28 + 10 = 38)
+outer.top = [{ monitor."built-in" = 10 }, 38]
+{{- else }}
+outer.top = 38
+{{- end }}
+outer.right = 8
+
+# Rule: alt = go there, alt-cmd = take the window along (monitor focus is the one exception: alt-cmd-comma/period).
+# Focus keys (alt-hjkl) are only active in 'main'. The terminal workspace uses the
+# 'term' mode below so tmux gets alt-hjkl for pane navigation (see sync-mode.sh).
+[mode.main.binding]
+# Direction: alt = focus, alt-cmd = move window (replaces Raycast alt-cmd-h/l split)
+alt-h = 'focus left'
+alt-j = 'focus down'
+alt-k = 'focus up'
+alt-l = 'focus right'
+alt-cmd-h = 'move left'
+alt-cmd-j = 'move down'
+alt-cmd-k = 'move up'
+alt-cmd-l = 'move right'
+
+# Monitors: focus prev/next display (windows go to a monitor via the workspace keys below)
+alt-cmd-comma = 'focus-monitor --wrap-around prev'
+alt-cmd-period = 'focus-monitor --wrap-around next'
+
+# Workspaces
+alt-u = 'workspace 1'
+alt-i = 'workspace 2'
+alt-o = 'workspace 3'
+alt-p = 'workspace 4'
+alt-cmd-u = 'move-node-to-workspace --focus-follows-window 1'
+alt-cmd-i = 'move-node-to-workspace --focus-follows-window 2'
+alt-cmd-o = 'move-node-to-workspace --focus-follows-window 3'
+alt-cmd-p = 'move-node-to-workspace --focus-follows-window 4'
+
+# Layout / fullscreen
+alt-cmd-backslash = 'layout tiles horizontal vertical'
+alt-cmd-m = 'fullscreen'
+
+# Resize the focused window; shift = reset all sizes in the workspace to equal
+alt-cmd-minus = 'resize smart -50'
+alt-cmd-equal = 'resize smart +50'
+alt-cmd-shift-equal = 'balance-sizes'
+
+# Enter a service mode for move/resize actions.
+alt-cmd-semicolon = 'mode service'
+
+# Active while the terminal workspace is focused: same as 'main' minus alt-hjkl (tmux pane navigation)
+[mode.term.binding]
+alt-cmd-h = 'move left'
+alt-cmd-j = 'move down'
+alt-cmd-k = 'move up'
+alt-cmd-l = 'move right'
+alt-cmd-comma = 'focus-monitor --wrap-around prev'
+alt-cmd-period = 'focus-monitor --wrap-around next'
+alt-u = 'workspace 1'
+alt-i = 'workspace 2'
+alt-o = 'workspace 3'
+alt-p = 'workspace 4'
+alt-cmd-u = 'move-node-to-workspace --focus-follows-window 1'
+alt-cmd-i = 'move-node-to-workspace --focus-follows-window 2'
+alt-cmd-o = 'move-node-to-workspace --focus-follows-window 3'
+alt-cmd-p = 'move-node-to-workspace --focus-follows-window 4'
+alt-cmd-backslash = 'layout tiles horizontal vertical'
+alt-cmd-m = 'fullscreen'
+alt-cmd-minus = 'resize smart -50'
+alt-cmd-equal = 'resize smart +50'
+alt-cmd-shift-equal = 'balance-sizes'
+alt-cmd-semicolon = 'mode service'
+
+[mode.service.binding]
+esc = 'mode main'
+enter = 'mode main'
+
+# Move windows
+h = 'move left'
+j = 'move down'
+k = 'move up'
+l = 'move right'
+
+# Resize
+minus = 'resize smart -50'
+equal = 'resize smart +50'
+
+# Send focused window to workspace, then follow it there
+1 = ['move-node-to-workspace 1', 'workspace 1', 'mode main']
+2 = ['move-node-to-workspace 2', 'workspace 2', 'mode main']
+3 = ['move-node-to-workspace 3', 'workspace 3', 'mode main']
+4 = ['move-node-to-workspace 4', 'workspace 4', 'mode main']
+
+# Misc helpers
+f = ['layout floating tiling', 'mode main']
+r = ['flatten-workspace-tree', 'mode main']
+m = ['move-workspace-to-monitor --wrap-around next', 'mode main']
+{{ if $work }}
+# Default is floating: only the apps listed below are tiled.
+# AeroSpace runs the first matching rule and stops, so keep specific apps above the catch-all.
+
+# 1: browser
+[[on-window-detected]]
+if.app-id = 'com.google.Chrome'
+run = 'move-node-to-workspace 1'
+
+# 2: terminal
+[[on-window-detected]]
+if.app-id = 'com.github.wez.wezterm'
+run = 'move-node-to-workspace 2'
+
+# 3: work tools
+[[on-window-detected]]
+if.app-id = 'com.jetbrains.datagrip'
+run = 'move-node-to-workspace 3'
+
+[[on-window-detected]]
+if.app-id = 'md.obsidian'
+run = 'move-node-to-workspace 3'
+
+# 4: messengers
+[[on-window-detected]]
+if.app-id = 'com.tinyspeck.slackmacgap'
+run = 'move-node-to-workspace 4'
+
+# Tiled, no workspace assignment
+[[on-window-detected]]
+if.app-id = 'com.microsoft.Outlook'
+run = 'layout tiling'
+
+# KakaoTalk stays a small floating window
+[[on-window-detected]]
+if.app-id = 'com.kakao.KakaoTalkMac'
+run = ['layout floating', 'move-node-to-workspace 4']
+
+# Everything else floats
+[[on-window-detected]]
+if = 'true'
+run = 'layout floating'
+{{- else }}
+# Other Macs keep tiling the apps they had before the work Mac's "float everything else" policy.
+# App -> workspace assignment (applies when a window opens)
+# 1: browsers
+[[on-window-detected]]
+if.app-id = 'com.google.Chrome'
+run = 'move-node-to-workspace 1'
+
+[[on-window-detected]]
+if.app-id = 'com.apple.Safari'
+run = 'move-node-to-workspace 1'
+
+[[on-window-detected]]
+if.app-id = 'app.zen-browser.zen'
+run = 'move-node-to-workspace 1'
+
+# 2: terminals
+[[on-window-detected]]
+if.app-id = 'com.github.wez.wezterm'
+run = 'move-node-to-workspace 2'
+
+[[on-window-detected]]
+if.app-id = 'dev.warp.Warp-Stable'
+run = 'move-node-to-workspace 2'
+
+# 3: work tools
+[[on-window-detected]]
+if.app-id = 'com.jetbrains.datagrip'
+run = 'move-node-to-workspace 3'
+
+[[on-window-detected]]
+if.app-id = 'notion.id'
+run = 'move-node-to-workspace 3'
+
+[[on-window-detected]]
+if.app-id = 'md.obsidian'
+run = 'move-node-to-workspace 3'
+
+# 4: messengers (KakaoTalk stays a small floating window)
+[[on-window-detected]]
+if.app-id = 'com.kakao.KakaoTalkMac'
+run = ['layout floating', 'move-node-to-workspace 4']
+
+[[on-window-detected]]
+if.app-id = 'com.tinyspeck.slackmacgap'
+run = 'move-node-to-workspace 4'
+
+[[on-window-detected]]
+if.app-id = 'com.hnc.Discord'
+run = 'move-node-to-workspace 4'
+
+# Always floating
+[[on-window-detected]]
+if.app-id = 'com.runjuu.Input-Source-Pro'
+run = 'layout floating'
+
+[[on-window-detected]]
+if.app-id = 'com.apple.systempreferences'
+run = 'layout floating'
+
+[[on-window-detected]]
+if.app-id = 'com.apple.ActivityMonitor'
+run = 'layout floating'
+
+[[on-window-detected]]
+if.app-id = 'com.apple.Preview'
+run = 'layout floating'
+
+[[on-window-detected]]
+if.app-id = 'us.zoom.xos'
+run = 'layout floating'
+{{- end }}

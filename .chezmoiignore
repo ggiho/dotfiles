@@ -61,3 +61,11 @@ Library/Preferences/org.pqrs.Karabiner-Updater.plist
 .mycli.log
 .mycli.test.log
 **/.DS_Store
+
+# --- SketchyBar / AeroSpace: the compiled window-frame helper is built per machine by
+#     run_onchange_after_build-winframes.sh (only winframes.swift is tracked);
+#     tool state folders that can show up inside the config dirs are never tracked
+.config/sketchybar/helper/winframes
+.config/sketchybar/.omc/**
+.config/sketchybar/**/.omc/**
+.config/aerospace/.omc/**

@@ -1,0 +1,22 @@
+#!/bin/bash
+# Build the small window-frame helper used by the SketchyBar workspace bar (helper/wsbar.py).
+#
+# The compiled binary is machine-specific (architecture, toolchain), so only the Swift source is
+# tracked in git; the binary is compiled here and rebuilt whenever the source changes.
+#
+# winframes.swift hash: {{ include "dot_config/sketchybar/helper/winframes.swift" | sha256sum }}
+set -euo pipefail
+
+SRC="$HOME/.config/sketchybar/helper/winframes.swift"
+OUT="$HOME/.config/sketchybar/helper/winframes"
+
+if ! command -v swiftc >/dev/null 2>&1; then
+  echo "chezmoi: swiftc not found (install the Xcode Command Line Tools) - skipping winframes build" >&2
+  exit 0
+fi
+[ -f "$SRC" ] || exit 0
+
+# Build next to the target and move into place, so a running wsbar.py never sees a half-written binary
+swiftc -O "$SRC" -o "$OUT.new"
+mv -f "$OUT.new" "$OUT"
+echo "chezmoi: built $OUT"

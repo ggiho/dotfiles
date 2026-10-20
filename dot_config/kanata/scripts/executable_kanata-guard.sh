@@ -33,6 +33,10 @@ launchctl disable "system/$GRABBER_DAEMON" 2>/dev/null || true
 if [[ -n "$CUID" ]]; then
   for svc in \
     org.pqrs.service.agent.karabiner_console_user_server \
+    org.pqrs.service.agent.Karabiner-Console-User-Server \
+    org.pqrs.service.agent.Karabiner-Menu \
+    org.pqrs.service.agent.Karabiner-NotificationWindow \
+    org.pqrs.service.agent.karabiner_session_monitor \
     org.pqrs.service.agent.Karabiner-Core-Service-rev2 \
     org.pqrs.service.agent.Karabiner-Core-Service; do
     launchctl bootout "gui/$CUID/$svc" 2>/dev/null || true

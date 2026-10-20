@@ -1,0 +1,228 @@
+#!/bin/bash
+
+source "$CONFIG_DIR/colors.sh"
+source "$CONFIG_DIR/icons.sh"
+
+PLUGIN_DIR="$CONFIG_DIR/plugins"
+source "$PLUGIN_DIR/slots.sh"
+FONT="Hack Nerd Font"
+
+bar=(
+  position=top
+  display=all
+  height=30
+  color=$BAR_COLOR
+  border_width=1
+  border_color=$BAR_BORDER_COLOR
+  blur_radius=18
+  shadow=off
+  sticky=on
+  topmost=window
+  padding_left=8
+  padding_right=8
+  y_offset=0
+  margin=0
+)
+sketchybar --bar "${bar[@]}"
+
+defaults=(
+  updates=when_shown
+  icon.font="$FONT:Bold:14.0"
+  icon.color=$ICON_COLOR
+  icon.padding_left=6
+  icon.padding_right=6
+  label.font="$FONT:Bold:13.0"
+  label.color=$LABEL_COLOR
+  label.padding_left=6
+  label.padding_right=6
+  padding_left=4
+  padding_right=4
+  background.height=24
+  background.corner_radius=7
+  background.border_width=1
+  background.border_color=$BACKGROUND_2
+  background.color=$BACKGROUND_1
+  popup.background.border_width=2
+  popup.background.corner_radius=9
+  popup.background.border_color=$POPUP_BORDER_COLOR
+  popup.background.color=$POPUP_BACKGROUND_COLOR
+  popup.blur_radius=20
+  scroll_texts=on
+)
+sketchybar --default "${defaults[@]}"
+
+
+workspaces=("1" "2" "3" "4")
+for sid in "${workspaces[@]}"; do
+  space=(
+    icon="$sid"
+    icon.highlight_color=$RED
+    label.drawing=off
+    icon.padding_left=10
+    icon.padding_right=10
+    padding_left=2
+    padding_right=2
+    background.color=$BACKGROUND_1
+    background.border_color=$BACKGROUND_2
+    click_script="aerospace workspace $sid"
+  )
+
+  # Highlight state of the number is set by ws_event.sh / ws_apps.sh (no per-number script)
+  sketchybar --add item "space.$sid" left \
+             --set "space.$sid" "${space[@]}"
+
+  # App icon slots after the number (full-color app icons); ws_apps.sh fills them for the
+  # focused workspace only and turns the background on for the focused window
+  # (8 slots to start with; ws_apps.sh adds more on demand, so there is no upper limit)
+  for n in 1 2 3 4 5 6 7 8; do
+    add_slot "$sid" "$n"
+  done
+done
+
+POPUP_OFF='sketchybar --set apple.logo popup.drawing=off'
+POPUP_TOGGLE='sketchybar --set apple.logo popup.drawing=toggle'
+
+apple_logo=(
+  icon=$APPLE
+  icon.font="$FONT:Bold:16.0"
+  icon.color=$GREEN
+  label.drawing=off
+  padding_right=8
+  click_script="$POPUP_TOGGLE"
+  popup.height=35
+)
+
+apple_prefs=(
+  icon=$PREFERENCES
+  label="Settings"
+  click_script="open -a 'System Settings'; $POPUP_OFF"
+)
+
+apple_activity=(
+  icon=$ACTIVITY
+  label="Activity"
+  click_script="open -a 'Activity Monitor'; $POPUP_OFF"
+)
+
+apple_lock=(
+  icon=$LOCK
+  label="Lock"
+  click_script="pmset displaysleepnow; $POPUP_OFF"
+)
+
+sketchybar --add item apple.logo left \
+           --set apple.logo "${apple_logo[@]}" \
+           --add item apple.prefs popup.apple.logo \
+           --set apple.prefs "${apple_prefs[@]}" \
+           --add item apple.activity popup.apple.logo \
+           --set apple.activity "${apple_activity[@]}" \
+           --add item apple.lock popup.apple.logo \
+           --set apple.lock "${apple_lock[@]}" \
+           --move apple.logo before space.1
+
+front_app=(
+  icon=
+  icon.padding_left=10
+  icon.padding_right=8
+  label.padding_left=4
+  label.padding_right=10
+  label.font="$FONT:Bold:14.0"
+  icon.background.drawing=off
+  click_script="open -a 'Mission Control'"
+)
+# The name (label) is set by helper/wsbar.py together with the icons, so it cannot run ahead of them
+sketchybar --add item front_app left \
+           --set front_app "${front_app[@]}"
+
+calendar=(
+  icon=
+  icon.font="$FONT:Bold:13.0"
+  label.drawing=on
+  update_freq=30
+  label.width=dynamic
+  label.align=right
+  padding_left=8
+  script="$PLUGIN_DIR/clock.sh"
+)
+sketchybar --add item calendar right \
+           --set calendar "${calendar[@]}" \
+           --subscribe calendar system_woke
+
+wifi=(
+  padding_right=0
+  padding_left=4
+  label.width=0
+  icon="$WIFI_DISCONNECTED"
+  script="$PLUGIN_DIR/wifi.sh"
+)
+sketchybar --add item wifi right \
+           --set wifi "${wifi[@]}" \
+           --subscribe wifi wifi_change mouse.clicked system_woke
+
+volume=(
+  script="$PLUGIN_DIR/volume.sh"
+  updates=on
+  label.drawing=off
+  icon.drawing=off
+  slider.width=0
+  slider.highlight_color=$BLUE
+  slider.background.height=5
+  slider.background.corner_radius=3
+  slider.background.color=$BACKGROUND_2
+  slider.knob=●
+  slider.knob.drawing=on
+  padding_right=2
+)
+
+volume_icon=(
+  icon=$VOLUME_100
+  icon.font="$FONT:Regular:14.0"
+  icon.color=$WHITE
+  icon.width=16
+  label.width=34
+  label.align=left
+  label.font="$FONT:Regular:14.0"
+  padding_left=8
+)
+
+sketchybar --add slider volume right \
+           --set volume "${volume[@]}" \
+           --subscribe volume volume_change mouse.clicked system_woke \
+           --add item volume_icon right \
+           --set volume_icon "${volume_icon[@]}"
+
+battery=(
+  script="$PLUGIN_DIR/battery.sh"
+  icon.font="$FONT:Regular:18.0"
+  label.drawing=on
+  padding_left=4
+  padding_right=2
+  update_freq=120
+  updates=on
+)
+sketchybar --add item battery right \
+           --set battery "${battery[@]}" \
+           --subscribe battery power_source_change system_woke
+
+status=(
+  background.color=$BACKGROUND_1
+  background.border_color=$BACKGROUND_2
+)
+sketchybar --add bracket status wifi volume_icon battery \
+           --set status "${status[@]}"
+
+# The workspace numbers, app icons, highlight and front-app name are driven by ONE long-running
+# process, helper/wsbar.py. It receives AeroSpace events directly (aerospace subscribe) and draws
+# everything with a single sketchybar call, so all parts change together.
+# This hidden item only checks every few seconds that the process is alive and restarts it.
+sketchybar --add item ws_guard left \
+           --set ws_guard drawing=off updates=on update_freq=10 script="$CONFIG_DIR/helper/wsbar-ensure.sh"
+
+# hotload is off on purpose: it reloads the bar whenever anything inside this folder changes, and
+# other tools writing files here (e.g. a Claude Code HUD plugin) made the bar reload in a loop.
+# After editing the config, reload by hand: sketchybar --reload
+sketchybar --hotload off
+sketchybar --update
+
+# (Re)start the process so it redraws against the freshly built items
+"$CONFIG_DIR/helper/wsbar-ensure.sh" restart
