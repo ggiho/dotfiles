@@ -20,7 +20,6 @@ import queue
 import re
 import signal
 import subprocess
-import sys
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -30,13 +29,15 @@ CONFIG_DIR = os.environ.get("CONFIG_DIR", HOME + "/.config/sketchybar")
 AEROSPACE = "/opt/homebrew/bin/aerospace"
 SKETCHYBAR = "/opt/homebrew/bin/sketchybar"
 FRAMES = CONFIG_DIR + "/helper/winframes"
+APPWATCH = CONFIG_DIR + "/helper/appwatch"
 WORKSPACES = ["1", "2", "3", "4"]
-TERM_WORKSPACE = "2"            # binding mode 'term' (no alt-hjkl) while this workspace is focused
 BASE_SLOTS = 8                  # slots the rc creates; more are added on demand
 POLL_SECONDS = 3.0
 HEAL_SECONDS = 20.0
 COALESCE_SECONDS = 0.008        # wait this long for sibling events before drawing
 SETTLE_SECONDS = 0.35           # hold window after a switch (see on_focus_event)
+GUARD_SECONDS = 0.6             # how long after a click on an app we wait before checking it got focus
+GUARD_GAP = 2.0                 # at most one corrective focus per this many seconds
 UID = os.getuid()
 DRYRUN = bool(os.environ.get("WSBAR_DRYRUN"))
 DEBUG = os.path.exists("/tmp/wsbar-debug-on")      # touch this file to log every event and decision
@@ -204,6 +205,7 @@ class State:
         self.app_of = {}          # window id -> app name (every window, floating too)
         self.ws_monitor = {}      # ws -> monitor id
         self.last_focus = {}      # ws -> last focused window id (predicts the focus on a switch)
+        self.last_focus_by_app = {}    # app name -> last focused window id
         self.visible_by_monitor = {}   # monitor id -> visible ws
 
     def shown_elsewhere(self, ws):
@@ -214,6 +216,8 @@ class State:
             self.focused_id = wid
             if ws:
                 self.last_focus[ws] = wid
+            if self.app_of.get(wid):
+                self.last_focus_by_app[self.app_of[wid]] = wid
         if ws:
             self.focused_ws = ws
             mon = self.ws_monitor.get(ws)
@@ -292,7 +296,11 @@ class Daemon:
         self.last_heal = time.time()
         self.last_switch = 0.0
         self.pending = None
-        self.after_render = []     # work that must not delay the next draw
+        self.children = []         # helper processes to stop together with this one
+        self.mac_front = None      # app macOS last activated
+        self.aero_focus = (0.0, None)   # (time, app) of the last AeroSpace focus-changed event
+        self.guard = None          # (app, time, bounced): an app the user just activated
+        self.last_fix = 0.0
 
     # ---- producers -------------------------------------------------------------------------
     def subscribe_loop(self):
@@ -301,6 +309,7 @@ class Daemon:
                 p = subprocess.Popen([AEROSPACE, "subscribe", "focus-changed", "focused-workspace-changed",
                                       "focused-monitor-changed", "window-detected"],
                                      stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, bufsize=1)
+                self.children.append(p)
                 log("subscribed to AeroSpace events")
                 self.q.put(("refresh", 0))
                 for line in p.stdout:
@@ -309,10 +318,31 @@ class Daemon:
                     except ValueError:
                         pass
                 p.wait()
+                self.children.remove(p)
             except Exception as e:
                 log("subscribe error: %s" % e)
             log("AeroSpace event stream ended; reconnecting")
             time.sleep(1.0)
+
+    def appwatch_loop(self):
+        """macOS app activations (Dock click, Cmd+Tab, Raycast) from the small appwatch helper."""
+        if not os.path.exists(APPWATCH):
+            log("appwatch helper missing; activation guard is off")
+            return
+        while True:
+            try:
+                p = subprocess.Popen([APPWATCH], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                                     text=True, bufsize=1)
+                self.children.append(p)
+                for line in p.stdout:
+                    kind, _, name = line.rstrip("\n").partition("\t")
+                    if kind == "activate" and name:
+                        self.q.put(("mac", (name, time.time())))
+                p.wait()
+                self.children.remove(p)
+            except Exception as e:
+                log("appwatch error: %s" % e)
+            time.sleep(2.0)
 
     def request_refresh(self, delay=0.05):
         if self.refresh_pending:
@@ -391,9 +421,6 @@ class Daemon:
                 out.append(wid)
         return out
 
-    def sync_mode(self, ws):
-        run([AEROSPACE, "mode", "term" if ws == TERM_WORKSPACE else "main"])
-
     # ---- consumer (the only place that mutates state or draws) --------------------------------
     def apply_focus(self, wid, ws, mon=None):
         s = self.state
@@ -407,11 +434,6 @@ class Daemon:
             s.visible_by_monitor[mon] = ws
         if s.focused_ws != prev:
             self.last_switch = time.time()
-            ws_now = s.focused_ws
-            # spawning a process can stall this thread for tens of ms on a busy machine, so the
-            # binding-mode sync waits until the bar has been drawn
-            self.after_render.append(lambda: threading.Thread(target=self.sync_mode, args=(ws_now,),
-                                                              daemon=True).start())
             self.request_refresh(0.1)
         if wid and wid not in s.app_of:
             self.request_refresh()
@@ -431,6 +453,51 @@ class Daemon:
         self.pending = None          # back on the shown workspace (or no switch in progress)
         self.apply_focus(wid, ws, mon)
 
+    # ---- activation guard --------------------------------------------------------------------
+    # Clicking an app that lives on another workspace (Dock, Cmd+Tab, Raycast) makes macOS activate
+    # it first and AeroSpace follow. AeroSpace asks the app for its focused window over the
+    # accessibility API; a slow app (DataGrip, a busy Chrome) does not answer in time, so AeroSpace
+    # falls back to the previously focused window and the click seems to be undone. If the app does
+    # not end up focused shortly after such an activation, focus its window explicitly (once).
+    def on_mac_activate(self, name, t):
+        self.mac_front = name
+        aero_t, aero_app = self.aero_focus
+        if aero_app == name and t - aero_t < 0.25:
+            return                  # AeroSpace focused this app itself; macOS is just catching up
+        # the focus-changed that undoes the click can reach us a hair before the activation itself
+        bounced = aero_app is not None and aero_app != name and t - aero_t < 0.05
+        self.guard = (name, t, bounced)
+        threading.Timer(GUARD_SECONDS, lambda: self.q.put(("guard", (name, t)))).start()
+
+    def guard_target(self, name):
+        s = self.state
+        wid = s.last_focus_by_app.get(name)
+        if wid in s.app_of:
+            return wid
+        tiled = [w[0] for ws in WORKSPACES for w in s.windows.get(ws, []) if w[2] == name]
+        if tiled:
+            return tiled[0]
+        return next((w for w, a in s.app_of.items() if a == name), None)
+
+    def check_guard(self, name, t):
+        g = self.guard
+        if not g or g[0] != name or g[1] != t:
+            return                  # a newer activation took over
+        self.guard = None
+        # the latest raw AeroSpace event, not the bar's state (which holds back flicker for a moment)
+        focused_app = self.aero_focus[1]
+        if focused_app == name and self.mac_front == name:
+            return                  # it worked
+        if not g[2]:
+            return                  # AeroSpace never moved the focus elsewhere: not this problem
+        wid = self.guard_target(name)
+        now = time.time()
+        if wid is None or now - self.last_fix < GUARD_GAP:
+            return
+        self.last_fix = now
+        log("GUARD %s was activated but AeroSpace focused %s; focusing window %s" % (name, focused_app, wid))
+        threading.Thread(target=run, args=([AEROSPACE, "focus", "--window-id", wid],), daemon=True).start()
+
     def handle(self, kind, payload):
         s = self.state
         if DEBUG and kind in ("event", "settle", "snapshot"):
@@ -445,6 +512,11 @@ class Daemon:
             e = payload.get("_event")
             if e == "focus-changed":
                 wid = str(payload.get("windowId")) if payload.get("windowId") is not None else None
+                app = s.app_of.get(wid)
+                now = time.time()
+                self.aero_focus = (now, app)
+                if self.guard and app is not None and app != self.guard[0] and now - self.guard[1] < GUARD_SECONDS + 0.4:
+                    self.guard = (self.guard[0], self.guard[1], True)
                 self.on_focus_event(wid, payload.get("workspace"))
             elif e == "focused-workspace-changed":
                 self.on_focus_event(None, payload.get("workspace"))
@@ -454,6 +526,10 @@ class Daemon:
                 wid = str(payload.get("windowId"))
                 s.app_of[wid] = payload.get("appName", "")
                 self.request_refresh(0.15)
+        elif kind == "mac":
+            self.on_mac_activate(*payload)
+        elif kind == "guard":
+            self.check_guard(*payload)
         elif kind == "snapshot":
             s.apply_snapshot(payload)
         elif kind == "refresh":
@@ -481,12 +557,19 @@ class Daemon:
             except queue.Empty:
                 pass
             self.bar.render(self.state)
-            todo, self.after_render = self.after_render, []
-            for fn in todo:
-                fn()
+
+    def stop_children(self, *_):
+        for p in list(self.children):
+            try:
+                p.terminate()
+            except Exception:
+                pass
+        os._exit(0)
 
     def run(self):
+        signal.signal(signal.SIGTERM, self.stop_children)
         threading.Thread(target=self.subscribe_loop, daemon=True).start()
+        threading.Thread(target=self.appwatch_loop, daemon=True).start()
         threading.Thread(target=self.ticker, daemon=True).start()
         self.loop()
 

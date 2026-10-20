@@ -67,13 +67,13 @@ for sid in "${workspaces[@]}"; do
     click_script="aerospace workspace $sid"
   )
 
-  # Highlight state of the number is set by ws_event.sh / ws_apps.sh (no per-number script)
+  # Highlight state of the number is set by helper/wsbar.py (no per-number script)
   sketchybar --add item "space.$sid" left \
              --set "space.$sid" "${space[@]}"
 
-  # App icon slots after the number (full-color app icons); ws_apps.sh fills them for the
-  # focused workspace only and turns the background on for the focused window
-  # (8 slots to start with; ws_apps.sh adds more on demand, so there is no upper limit)
+  # App icon slots after the number (full-color app icons); helper/wsbar.py fills them and turns
+  # the background on for the focused window
+  # (8 slots to start with; wsbar.py adds more on demand, so there is no upper limit)
   for n in 1 2 3 4 5 6 7 8; do
     add_slot "$sid" "$n"
   done

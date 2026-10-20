@@ -7,11 +7,10 @@
 PIDFILE="/tmp/wsbar.$(id -u).pid"
 DIR="${CONFIG_DIR:-$HOME/.config/sketchybar}"
 
+# (the pid file lives in /tmp, which is cleared at boot, so a recycled pid is not a concern)
 if [ "$1" != "restart" ] && [ -f "$PIDFILE" ]; then
-  pid="$(cat "$PIDFILE")"
-  if kill -0 "$pid" 2>/dev/null && /bin/ps -p "$pid" -o command= | grep -q "wsbar.py"; then
-    exit 0
-  fi
+  read -r pid < "$PIDFILE"
+  kill -0 "$pid" 2>/dev/null && exit 0
 fi
 
 CONFIG_DIR="$DIR" nohup /usr/bin/python3 "$DIR/helper/wsbar.py" >> "/tmp/wsbar.$(id -u).out" 2>&1 &

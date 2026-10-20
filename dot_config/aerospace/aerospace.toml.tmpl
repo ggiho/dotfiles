@@ -13,8 +13,8 @@
 config-version = 2
 start-at-login = true
 
-# Pick the binding mode for this workspace. (The bar needs no callback: helper/wsbar.py in the
-# SketchyBar config receives AeroSpace events directly through `aerospace subscribe`.)
+# Pick the binding mode for this workspace. This is the only place that does it; the bar
+# (helper/wsbar.py in the SketchyBar config) gets its own events through `aerospace subscribe`.
 exec-on-workspace-change = ['/bin/bash', '-c',
     '$HOME/.config/aerospace/sync-mode.sh'
 ]
