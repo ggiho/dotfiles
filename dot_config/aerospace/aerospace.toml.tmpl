@@ -76,14 +76,15 @@ outer.right = 8
 # 'term' mode below so tmux gets alt-hjkl for pane navigation (see sync-mode.sh).
 [mode.main.binding]
 # Direction: alt = focus, alt-cmd = move window (replaces Raycast alt-cmd-h/l split)
+# A fullscreen window would hide the move, so moving leaves fullscreen first (like the focus keys do).
 alt-h = 'focus left'
 alt-j = 'focus down'
 alt-k = 'focus up'
 alt-l = 'focus right'
-alt-cmd-h = 'move left'
-alt-cmd-j = 'move down'
-alt-cmd-k = 'move up'
-alt-cmd-l = 'move right'
+alt-cmd-h = ['fullscreen off', 'move left']
+alt-cmd-j = ['fullscreen off', 'move down']
+alt-cmd-k = ['fullscreen off', 'move up']
+alt-cmd-l = ['fullscreen off', 'move right']
 
 # Monitors: focus prev/next display (windows go to a monitor via the workspace keys below)
 alt-cmd-comma = 'focus-monitor --wrap-around prev'
@@ -94,6 +95,9 @@ alt-u = 'workspace 1'
 alt-i = 'workspace 2'
 alt-o = 'workspace 3'
 alt-p = 'workspace 4'
+# Back to the previous workspace / the previous window. Also in 'term'.
+alt-tab = 'workspace-back-and-forth'
+alt-space = 'focus-back-and-forth'
 alt-cmd-u = 'move-node-to-workspace --focus-follows-window 1'
 alt-cmd-i = 'move-node-to-workspace --focus-follows-window 2'
 alt-cmd-o = 'move-node-to-workspace --focus-follows-window 3'
@@ -113,10 +117,12 @@ alt-cmd-semicolon = 'mode service'
 
 # Active while the terminal workspace is focused: same as 'main' minus alt-hjkl (tmux pane navigation)
 [mode.term.binding]
-alt-cmd-h = 'move left'
-alt-cmd-j = 'move down'
-alt-cmd-k = 'move up'
-alt-cmd-l = 'move right'
+alt-tab = 'workspace-back-and-forth'
+alt-space = 'focus-back-and-forth'
+alt-cmd-h = ['fullscreen off', 'move left']
+alt-cmd-j = ['fullscreen off', 'move down']
+alt-cmd-k = ['fullscreen off', 'move up']
+alt-cmd-l = ['fullscreen off', 'move right']
 alt-cmd-comma = 'focus-monitor --wrap-around prev'
 alt-cmd-period = 'focus-monitor --wrap-around next'
 alt-u = 'workspace 1'
