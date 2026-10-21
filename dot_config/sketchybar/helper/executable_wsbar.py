@@ -35,6 +35,8 @@ APPWATCH = CONFIG_DIR + "/helper/appwatch"
 WORKSPACES = ["1", "2", "3", "4"]
 BASE_SLOTS = 8                  # slots the rc creates; more are added on demand
 POLL_SECONDS = 3.0
+SWITCH_QUIET_SECONDS = 4.0        # after a workspace switch the periodic check only re-baselines
+STRUCT_POLL_SECONDS = 60.0      # how often AeroSpace is asked for the full window list when nothing seems to change
 HEAL_SECONDS = 20.0
 COALESCE_SECONDS = 0.008        # wait this long for sibling events before drawing
 SETTLE_SECONDS = 0.35           # hold window after a switch (see on_focus_event)
@@ -117,7 +119,17 @@ class Bar:
         if DEBUG:
             kinds = [k for k, m in (("NUM", "icon.highlight="), ("ICON", "icon.background.image="),
                                     ("HL", "background.drawing="), ("NAME", "front_app")) if any(m in a for a in args)]
-            log("DBG SEND %s" % "+".join(kinds))
+            # which items this update touches, and the properties that matter for what is visible
+            shown = ("icon.background.image=", "background.drawing=", "icon.highlight=", "drawing=")
+            parts, item = [], None
+            for a in args:
+                if a == "--set":
+                    item = None
+                elif item is None:
+                    item = a
+                elif a.startswith(shown):
+                    parts.append("%s:%s" % (item, a.replace("icon.background.image=app.", "img=")[:60]))
+            log("DBG SEND %s | %s" % ("+".join(kinds), " ".join(parts)[:400]))
         try:
             subprocess.run([SKETCHYBAR] + args, capture_output=True, timeout=6)
         except Exception as e:
@@ -253,29 +265,47 @@ class State:
             self.focused_id, self.focused_ws = focused[0], focused[1]
 
 
+WINDOW_FORMAT = "%{window-id}|%{workspace}|%{window-layout}|%{app-bundle-id}|%{app-name}"
+
+
+def parse_rows(out):
+    return [l.split("|") for l in out.split("\n") if l.count("|") == 4]
+
+
+def parse_frames(out):
+    frames = {}
+    for l in out.split("\n"):
+        q = l.split()
+        if len(q) == 5:
+            frames[q[0]] = (int(q[1]), int(q[2]), q[3], q[4])
+    return frames
+
+
+def poll_frames():
+    """On-screen windows and their frames, straight from the system (CGWindowList through winframes).
+    AeroSpace is deliberately not asked: `list-windows --all` makes it re-read every app's windows
+    through the accessibility API, which cost it ~2% of a core when done every 3 seconds."""
+    return parse_frames(run([FRAMES]))
+
+
 def take_snapshot():
     """All the slow lookups, in parallel. Returns a dict, or None if AeroSpace did not answer."""
     with ThreadPoolExecutor(max_workers=4) as ex:
-        f_all = ex.submit(run, [AEROSPACE, "list-windows", "--all", "--format",
-                                "%{window-id}|%{workspace}|%{window-layout}|%{app-bundle-id}|%{app-name}"])
+        f_all = ex.submit(run, [AEROSPACE, "list-windows", "--all", "--format", WINDOW_FORMAT])
         f_foc = ex.submit(run, [AEROSPACE, "list-windows", "--focused", "--format",
                                 "%{window-id}|%{workspace}"])
         f_fr = ex.submit(run, [FRAMES])
         f_ws = ex.submit(run, [AEROSPACE, "list-workspaces", "--all", "--format",
                                "%{workspace}|%{monitor-id}|%{workspace-is-visible}"])
         all_out, foc_out, fr_out, ws_out = f_all.result(), f_foc.result(), f_fr.result(), f_ws.result()
-    rows = [l.split("|") for l in all_out.split("\n") if l.count("|") == 4]
+    rows = parse_rows(all_out)
     if not rows and not ws_out:
         return None
     focused = None
     p = foc_out.strip().split("|")
     if len(p) == 2:
         focused = (p[0], p[1])         # (window id, workspace)
-    frames = {}
-    for l in fr_out.split("\n"):
-        q = l.split()
-        if len(q) == 5:
-            frames[q[0]] = (int(q[1]), int(q[2]), q[3], q[4])
+    frames = parse_frames(fr_out)
     wsinfo = {}
     for l in ws_out.split("\n"):
         q = l.split("|")
@@ -290,8 +320,11 @@ class Daemon:
         self.state = State()
         self.bar = Bar()
         self.refresh_pending = False
+        self.refresh_full = False      # a pending refresh has to ask AeroSpace for everything
+        self.last_rows = None          # window list of the last snapshot, reused by light refreshes
         self.poll_busy = False
-        self.last_struct = None
+        self.last_ids = None         # on-screen window ids at the last poll
+        self.last_full = 0.0         # when AeroSpace was last asked for the full window list by the poll
         self.last_frames = None
         self.suspects = {}       # window id -> time first flagged
         self.cooldown = {}       # window id -> time last floated
@@ -314,6 +347,7 @@ class Daemon:
                                      stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, bufsize=1)
                 self.children.append(p)
                 log("subscribed to AeroSpace events")
+                self.refresh_full = True       # first look after (re)connecting: everything
                 self.q.put(("refresh", 0))
                 for line in p.stdout:
                     try:
@@ -347,7 +381,13 @@ class Daemon:
                 log("appwatch error: %s" % e)
             time.sleep(2.0)
 
-    def request_refresh(self, delay=0.05):
+    def request_refresh(self, delay=0.05, full=True):
+        """full: ask AeroSpace for everything. Not full: only re-read the window frames (the system's
+        window list) and reuse the window list we already have; that is enough after a workspace
+        switch, and it keeps AeroSpace free to switch (its full window listing makes it re-read every
+        app's windows, right while it is busy focusing the new one)."""
+        if full:
+            self.refresh_full = True
         if self.refresh_pending:
             return
         self.refresh_pending = True
@@ -359,27 +399,53 @@ class Daemon:
             self.q.put(("tick", 0))
 
     # ---- workers ---------------------------------------------------------------------------
-    def refresh_worker(self):
+    def refresh_worker(self, full):
+        if not full and self.last_rows:
+            frames = poll_frames()
+            if frames:
+                self.q.put(("snapshot", {"rows": self.last_rows, "focused": None, "frames": frames, "wsinfo": None}))
+                return
         snap = take_snapshot()
         if snap:
             self.q.put(("snapshot", snap))
 
     def poll_worker(self):
+        """Every few seconds: look at the system's window list (cheap, no AeroSpace). Only when the set
+        of windows changed (or every STRUCT_POLL_SECONDS as a safety net) ask AeroSpace for everything."""
         try:
-            snap = take_snapshot()
-            if not snap:
-                return
+            frames = poll_frames()
             now = time.time()
-            struct = hash((tuple(map(tuple, snap["rows"])), snap["focused"]))
-            tiled_ids = {r[0] for r in snap["rows"] if r[2] != "floating" and "minimized" not in r[2]}
-            fsig = hash(tuple(sorted((k, v) for k, v in snap["frames"].items() if k in tiled_ids)))
+            if not frames:
+                # winframes is missing or failing (a new machine before its Swift helpers were built):
+                # the system's window list is not available, so the slow safety net is all there is
+                if now - self.last_full > STRUCT_POLL_SECONDS:
+                    self.last_full = now
+                    snap = take_snapshot()
+                    if snap:
+                        self.q.put(("snapshot", snap))
+                return
+            ids = frozenset(frames)
+            if now - self.last_switch < SWITCH_QUIET_SECONDS and self.last_ids is not None:
+                # a workspace switch moves every window on and off the screen: that is not a change of
+                # structure and not shaking, so just take the new picture as the baseline
+                tiled = {w[0] for ws in WORKSPACES for w in self.state.windows.get(ws, [])}
+                self.last_ids = ids
+                self.last_frames = hash(tuple(sorted((k, v) for k, v in frames.items() if k in tiled)))
+                return
+            if ids != self.last_ids or now - self.last_full > STRUCT_POLL_SECONDS:
+                self.last_ids, self.last_full = ids, now
+                snap = take_snapshot()
+                if snap:
+                    self.suspects.clear()
+                    tiled = {r[0] for r in snap["rows"] if r[2] != "floating" and "minimized" not in r[2]}
+                    self.last_frames = hash(tuple(sorted((k, v) for k, v in snap["frames"].items() if k in tiled)))
+                    self.q.put(("snapshot", snap))
+                return
+            # same windows: only shaking is left to look for (the tiled ones, as known from the last snapshot)
+            tiled_ids = {w[0] for ws in WORKSPACES for w in self.state.windows.get(ws, [])}
+            fsig = hash(tuple(sorted((k, v) for k, v in frames.items() if k in tiled_ids)))
             fresh = {k: t for k, t in self.suspects.items() if now - t < 30}
             self.suspects = fresh
-            if struct != self.last_struct:
-                self.last_struct, self.last_frames = struct, fsig
-                self.suspects.clear()
-                self.q.put(("snapshot", snap))
-                return
             if fsig != self.last_frames or fresh:
                 refresh = fsig != self.last_frames
                 self.last_frames = fsig
@@ -393,14 +459,16 @@ class Daemon:
                     if now - self.cooldown.get(i, 0) < 300:
                         continue
                     self.cooldown[i] = now
-                    app = next((r[4] for r in snap["rows"] if r[0] == i), "?")
+                    app = self.state.app_of.get(i, "?")
                     run([AEROSPACE, "layout", "floating", "--window-id", i])
                     with open(SHAKE_LOG, "a") as f:
                         f.write("%s floated window %s (%s): its frame kept flipping while tiled\n"
                                 % (time.strftime("%F %T"), i, app))
                     refresh = True
                 if refresh:
-                    self.q.put(("snapshot", take_snapshot() or snap))
+                    snap = take_snapshot()
+                    if snap:
+                        self.q.put(("snapshot", snap))
         finally:
             self.poll_busy = False
 
@@ -437,7 +505,9 @@ class Daemon:
             s.visible_by_monitor[mon] = ws
         if s.focused_ws != prev:
             self.last_switch = time.time()
-            self.request_refresh(0.1)
+            self.request_refresh(0.1, full=False)
+            # the windows are still settling at 0.1 s: read their frames once more when they are done
+            threading.Timer(0.7, lambda: self.request_refresh(0.0, full=False)).start()
         if wid and wid not in s.app_of:
             self.request_refresh()
 
@@ -566,9 +636,11 @@ class Daemon:
             self.check_guard(*payload)
         elif kind == "snapshot":
             s.apply_snapshot(payload)
+            self.last_rows = payload["rows"]
         elif kind == "refresh":
             self.refresh_pending = False
-            threading.Thread(target=self.refresh_worker, daemon=True).start()
+            full, self.refresh_full = self.refresh_full, False
+            threading.Thread(target=self.refresh_worker, args=(full,), daemon=True).start()
         elif kind == "tick":
             if not self.poll_busy:
                 self.poll_busy = True
@@ -639,10 +711,26 @@ def take_lock(replace):
     return f
 
 
+def reap_orphans():
+    """After a hard kill (kill -9) an earlier instance leaves its helper processes without a parent.
+    Stop the ones that are exactly ours: the event subscription and the app watcher."""
+    for l in run(["/bin/ps", "-axo", "pid=,ppid=,command="]).splitlines():
+        parts = l.split(None, 2)
+        if len(parts) < 3 or parts[1] != "1":
+            continue
+        cmd = parts[2]
+        if cmd.startswith(AEROSPACE + " subscribe focus-changed focused-workspace-changed") or cmd.split()[0] == APPWATCH:
+            try:
+                os.kill(int(parts[0]), signal.SIGTERM)
+            except OSError:
+                pass
+
+
 def main():
     lock = None
     if not DRYRUN:
         lock = take_lock(replace="--keep" not in sys.argv)
+        reap_orphans()
     log("wsbar started (dryrun=%s)" % DRYRUN)
     Daemon().run()
 

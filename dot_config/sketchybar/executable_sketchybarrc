@@ -14,7 +14,7 @@ bar=(
   color=$BAR_COLOR
   border_width=1
   border_color=$BAR_BORDER_COLOR
-  blur_radius=18
+  blur_radius=0   # the bar is 90% opaque, so the blur is hardly visible; it cost WindowServer ~7% of a core on 3 displays
   shadow=off
   sticky=on
   topmost=window
@@ -42,7 +42,7 @@ defaults=(
   background.border_width=1
   background.border_color=$BACKGROUND_2
   background.color=$BACKGROUND_1
-  popup.background.border_width=2
+  popup.background.border_width=1
   popup.background.corner_radius=9
   popup.background.border_color=$POPUP_BORDER_COLOR
   popup.background.color=$POPUP_BACKGROUND_COLOR
@@ -80,7 +80,6 @@ for sid in "${workspaces[@]}"; do
 done
 
 POPUP_OFF='sketchybar --set apple.logo popup.drawing=off'
-POPUP_TOGGLE='sketchybar --set apple.logo popup.drawing=toggle'
 
 apple_logo=(
   icon=$APPLE
@@ -88,7 +87,7 @@ apple_logo=(
   icon.color=$GREEN
   label.drawing=off
   padding_right=8
-  click_script="$POPUP_TOGGLE"
+  click_script="$PLUGIN_DIR/barpopup.sh apple.logo"
   popup.height=35
 )
 
@@ -195,6 +194,9 @@ battery=(
   script="$PLUGIN_DIR/battery.sh"
   icon.font="$FONT:Regular:18.0"
   label.drawing=on
+  icon.padding_left=6
+  icon.padding_right=3
+  label.padding_left=0
   padding_left=4
   padding_right=2
   update_freq=120
@@ -210,6 +212,133 @@ status=(
 )
 sketchybar --add bracket status wifi volume_icon battery \
            --set status "${status[@]}"
+
+# CPU (share of all cores) and memory (used GB, colored by macOS memory pressure), left of the battery.
+# One helper call per refresh updates both: the script is on cpu and sets mem too.
+cpu=(
+  icon=󰓅
+  icon.font="$FONT:Regular:15.0"
+  icon.padding_left=6
+  icon.padding_right=3
+  label="--%"
+  label.width=34
+  label.align=left
+  label.padding_left=0
+  padding_left=4
+  padding_right=0
+  updates=on
+  script="$PLUGIN_DIR/popupevents.sh"
+  click_script="$PLUGIN_DIR/barpopup.sh cpu"
+  popup.align=right
+  popup.background.color=$CAT_BASE
+  popup.background.border_color=$CAT_SURFACE1
+)
+mem=(
+  icon=󰍛
+  icon.font="$FONT:Regular:15.0"
+  icon.padding_left=6
+  icon.padding_right=3
+  label="--G"
+  label.width=42
+  label.align=left
+  label.padding_left=0
+  padding_left=0
+  padding_right=2
+  script="$PLUGIN_DIR/popupevents.sh"
+  click_script="$PLUGIN_DIR/barpopup.sh mem"
+  popup.align=right
+  popup.background.color=$CAT_BASE
+  popup.background.border_color=$CAT_SURFACE1
+)
+# (right-side items stack leftwards in the order they are added, so mem goes first to read "cpu mem")
+sketchybar --add item mem right \
+           --set mem "${mem[@]}" \
+           --subscribe mem mouse.exited.global \
+           --add item cpu right \
+           --set cpu "${cpu[@]}" \
+           --subscribe cpu mouse.exited.global front_app_switched \
+           --add bracket sys cpu mem \
+           --set sys "${status[@]}"
+
+# Popups of the cpu and mem items (filled when they are clicked, see plugins/barpopup.sh). The bars use
+# the same look as the volume slider in the bar: a thin rounded track with a colored fill.
+popup_text=(
+  icon.font="$FONT:Regular:12.0"
+  icon.color=$CAT_SUBTEXT0
+  icon.width=150
+  icon.align=left
+  icon.padding_left=10
+  icon.padding_right=0
+  padding_left=4
+  padding_right=4
+  label="--"
+  label.font="$FONT:Bold:12.0"
+  label.color=$CAT_TEXT
+  label.width=172
+  label.align=right
+  label.padding_left=0
+  label.padding_right=10
+  background.drawing=off
+)
+popup_bar=(
+  "${popup_text[@]}"
+  label.width=54
+  slider.width=110
+  slider.percentage=0
+  slider.highlight_color=$CAT_BLUE
+  slider.background.height=6
+  slider.background.corner_radius=3
+  slider.background.color=$CAT_SURFACE1
+  slider.knob.drawing=off
+)
+sketchybar --add slider cpu.popup.usage popup.cpu 110 \
+           --set cpu.popup.usage "${popup_bar[@]}" icon="CPU busy" icon.color=$CAT_TEXT \
+           --add slider cpu.popup.user popup.cpu 110 \
+           --set cpu.popup.user "${popup_bar[@]}" icon="User" \
+           --add slider cpu.popup.sys popup.cpu 110 \
+           --set cpu.popup.sys "${popup_bar[@]}" icon="System" \
+           --add item cpu.popup.load popup.cpu \
+           --set cpu.popup.load "${popup_text[@]}" icon="Load average" \
+           --add item cpu.popup.header popup.cpu \
+           --set cpu.popup.header "${popup_text[@]}" icon="Top apps" icon.color=$CAT_MAUVE \
+                 icon.font="$FONT:Bold:12.0" label="recent avg" label.color=$CAT_OVERLAY1 \
+                 label.font="$FONT:Regular:11.0"
+for i in 1 2 3 4 5 6 7 8; do
+  sketchybar --add slider "cpu.popup.app.$i" popup.cpu 110 \
+             --set "cpu.popup.app.$i" "${popup_bar[@]}" icon.color=$CAT_TEXT drawing=off
+done
+# Popup of the mem item: how the memory is split, swap, pressure and the biggest apps
+sketchybar --add slider mem.popup.used popup.mem 110 \
+           --set mem.popup.used "${popup_bar[@]}" icon="Used" icon.color=$CAT_TEXT \
+           --add slider mem.popup.app popup.mem 110 \
+           --set mem.popup.app "${popup_bar[@]}" icon="App memory" \
+           --add slider mem.popup.wired popup.mem 110 \
+           --set mem.popup.wired "${popup_bar[@]}" icon="Wired" \
+           --add slider mem.popup.comp popup.mem 110 \
+           --set mem.popup.comp "${popup_bar[@]}" icon="Compressed" \
+           --add item mem.popup.swap popup.mem \
+           --set mem.popup.swap "${popup_text[@]}" icon="Swap used" \
+           --add item mem.popup.pressure popup.mem \
+           --set mem.popup.pressure "${popup_text[@]}" icon="Pressure" \
+           --add item mem.popup.header popup.mem \
+           --set mem.popup.header "${popup_text[@]}" icon="Top apps" icon.color=$CAT_MAUVE \
+                 icon.font="$FONT:Bold:12.0" label="approx." label.color=$CAT_OVERLAY1 \
+                 label.font="$FONT:Regular:11.0"
+for i in 1 2 3 4 5 6 7 8; do
+  sketchybar --add slider "mem.popup.app.$i" popup.mem 110 \
+             --set "mem.popup.app.$i" "${popup_bar[@]}" icon.color=$CAT_TEXT drawing=off
+done
+sketchybar --add item mem.activity popup.mem \
+           --set mem.activity "${popup_text[@]}" \
+                 icon="Open Activity Monitor" icon.color=$CAT_OVERLAY1 \
+                 icon.font="$FONT:Regular:11.0" label.drawing=off \
+                 click_script="open -a 'Activity Monitor'; sketchybar --set mem popup.drawing=off"
+
+sketchybar --add item cpu.activity popup.cpu \
+           --set cpu.activity "${popup_text[@]}" \
+                 icon="Open Activity Monitor" icon.color=$CAT_OVERLAY1 \
+                 icon.font="$FONT:Regular:11.0" label.drawing=off \
+                 click_script="open -a 'Activity Monitor'; sketchybar --set cpu popup.drawing=off"
 
 # The workspace numbers, app icons, highlight and front-app name are driven by ONE long-running
 # process, helper/wsbar.py. It receives AeroSpace events directly (aerospace subscribe) and draws

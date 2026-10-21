@@ -26,5 +26,18 @@ export BACKGROUND_1=$BG1
 export BACKGROUND_2=$BG2
 export ICON_COLOR=$WHITE
 export LABEL_COLOR=$WHITE
-export POPUP_BACKGROUND_COLOR=$BG0
-export POPUP_BORDER_COLOR=$WHITE
+export POPUP_BACKGROUND_COLOR=$BG0O85
+export POPUP_BORDER_COLOR=$BG2
+
+# Catppuccin Mocha, used by the CPU popup only (the bar keeps the palette above)
+export CAT_BASE=0xb31e1e2e
+export CAT_SURFACE1=0xff45475a
+export CAT_SURFACE2=0xff585b70
+export CAT_OVERLAY1=0xff7f849c
+export CAT_SUBTEXT0=0xffa6adc8
+export CAT_TEXT=0xffcdd6f4
+export CAT_BLUE=0xff89b4fa
+export CAT_MAUVE=0xffcba6f7
+export CAT_GREEN=0xffa6e3a1
+export CAT_YELLOW=0xfff9e2af
+export CAT_RED=0xfff38ba8

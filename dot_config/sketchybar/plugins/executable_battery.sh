@@ -4,7 +4,9 @@ source "$CONFIG_DIR/colors.sh"
 source "$CONFIG_DIR/icons.sh"
 
 battery_info="$(pmset -g batt)"
-percentage="$(printf '%s' "$battery_info" | grep -Eo '[0-9]+%' | cut -d% -f1)"
+# only the internal battery's line: pmset can list other power sources too (a Bluetooth keyboard or
+# AirPods at 80% next to the Mac at 100%), and taking every percentage mixed them up
+percentage="$(printf '%s\n' "$battery_info" | grep 'InternalBattery' | grep -Eo '[0-9]+%' | head -1 | cut -d% -f1)"
 charging="$(printf '%s' "$battery_info" | grep 'AC Power')"
 
 if ! printf '%s' "$battery_info" | grep -q 'InternalBattery'; then

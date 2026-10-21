@@ -2,12 +2,14 @@
 # Build the small Swift helpers used by the SketchyBar workspace bar (helper/wsbar.py):
 #   winframes  window frames (shake detection / screen order)
 #   appwatch   app activations (activation guard)
+#   sysstat    CPU and memory for the bar
 #
 # The compiled binaries are machine-specific (architecture, toolchain), so only the Swift sources
 # are tracked in git; the binaries are compiled here and rebuilt whenever a source changes.
 #
 # winframes.swift hash: {{ include "dot_config/sketchybar/helper/winframes.swift" | sha256sum }}
 # appwatch.swift hash: {{ include "dot_config/sketchybar/helper/appwatch.swift" | sha256sum }}
+# sysstat.swift hash: {{ include "dot_config/sketchybar/helper/sysstat.swift" | sha256sum }}
 set -euo pipefail
 
 if ! command -v swiftc >/dev/null 2>&1; then
@@ -15,7 +17,7 @@ if ! command -v swiftc >/dev/null 2>&1; then
   exit 0
 fi
 
-for name in winframes appwatch; do
+for name in winframes appwatch sysstat; do
   SRC="$HOME/.config/sketchybar/helper/$name.swift"
   OUT="$HOME/.config/sketchybar/helper/$name"
   [ -f "$SRC" ] || continue
