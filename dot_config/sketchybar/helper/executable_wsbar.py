@@ -175,17 +175,22 @@ class Bar:
 
         # app icons: only the focused workspace is expanded
         for ws in WORKSPACES:
-            wins = s.windows.get(ws, []) if ws == s.focused_ws else []
-            for i, (wid, bundle, app) in enumerate(wins, 1):
+            wins = s.icons.get(ws, []) if ws == s.focused_ws else []
+            hl_id = s.highlighted(ws) if ws == s.focused_ws else None
+            for i, (wid, bundle, app, floating) in enumerate(wins, 1):
                 if i > self.slots[ws]:
                     self.send(args)        # keep order: earlier --set first, then the new item
                     args = []
                     self.add_slot(ws, i)
                 item = "wsapp.%s.%d" % (ws, i)
-                hl = "on" if wid == s.focused_id else "off"
-                static = "on|%s|%s" % (bundle, wid)
+                hl = "on" if wid == hl_id else "off"
+                static = "on|%s|%s|%s" % (bundle, wid, "f" if floating else "t")
                 if self.img.get(item) != static:
                     args += ["--set", item, "drawing=on", "icon.background.image=app." + bundle,
+                             # the pill follows the icon: 26 wide and 28 high fit the 0.85 icons exactly
+                             "icon.background.image.scale=" + ("0.7" if floating else "0.85"),
+                             "icon.width=" + ("22" if floating else "26"),
+                             "background.height=" + ("24" if floating else "28"),
                              "background.drawing=" + hl,
                              "click_script=%s focus --window-id %s" % (AEROSPACE, wid)]
                     self.img[item] = static
@@ -216,6 +221,7 @@ class State:
         self.focused_ws = None
         self.focused_id = None
         self.windows = {}         # ws -> [(id, bundle, app)] tiled windows in screen order
+        self.icons = {}           # ws -> [(id, bundle, app, floating)]: what the bar shows (tiled, then floating apps)
         self.app_of = {}          # window id -> app name (every window, floating too)
         self.ws_monitor = {}      # ws -> monitor id
         self.last_focus = {}      # ws -> last focused window id (predicts the focus on a switch)
@@ -238,6 +244,15 @@ class State:
             if mon is not None:
                 self.visible_by_monitor[mon] = ws
 
+    def highlighted(self, ws):
+        """Id of the icon that stands for the focused window: its own, or else the icon of its app
+        (a floating window of an app that is shown by another window's icon)."""
+        icons = self.icons.get(ws, [])
+        if any(i[0] == self.focused_id for i in icons):
+            return self.focused_id
+        app = self.app_of.get(self.focused_id)
+        return next((i[0] for i in icons if i[2] == app), None) if app else None
+
     def apply_snapshot(self, snap):
         rows, focused, frames, wsinfo = snap["rows"], snap["focused"], snap["frames"], snap["wsinfo"]
         if wsinfo:
@@ -258,6 +273,16 @@ class State:
                 # not on screen (parked windows have no meaningful position): keep the old order
                 tiled.sort(key=lambda r: (prev_order.index(r[0]) if r[0] in prev_order else 10 ** 6, int(r[0])))
             self.windows[ws] = [(r[0], r[3], r[4]) for r in tiled]
+            # Floating windows have no place in the layout, but the bar should still show where the focus
+            # is when it is on one: one icon per app (several Finder windows are one icon), after the tiled
+            # ones, and none for an app that already has a tiled icon.
+            icons = [(r[0], r[3], r[4], False) for r in tiled]
+            seen = {r[4] for r in tiled}
+            for r in sorted((r for r in rows if r[1] == ws and r[2] == "floating"), key=lambda r: int(r[0])):
+                if r[4] not in seen:
+                    seen.add(r[4])
+                    icons.append((r[0], r[3], r[4], True))
+            self.icons[ws] = icons
         # The focus comes from AeroSpace events. A lookup right after a switch still reports the
         # OLD focused window until macOS finishes activating the new one, so it must not overwrite
         # the event-driven focus; it is only used to bootstrap when nothing is known yet.
@@ -321,6 +346,7 @@ class Daemon:
         self.bar = Bar()
         self.refresh_pending = False
         self.refresh_full = False      # a pending refresh has to ask AeroSpace for everything
+        self.refresh_check = False     # a pending refresh first checks whether the set of windows changed
         self.last_rows = None          # window list of the last snapshot, reused by light refreshes
         self.poll_busy = False
         self.last_ids = None         # on-screen window ids at the last poll
@@ -375,19 +401,44 @@ class Daemon:
                     kind, _, name = line.rstrip("\n").partition("\t")
                     if kind == "activate" and name:
                         self.q.put(("mac", (name, time.time())))
+                    elif kind == "terminate" and name:
+                        self.q.put(("terminated", name))
                 p.wait()
                 self.children.remove(p)
             except Exception as e:
                 log("appwatch error: %s" % e)
             time.sleep(2.0)
 
-    def request_refresh(self, delay=0.05, full=True):
+    def winwatch_loop(self):
+        """`winframes --watch` prints a line whenever a window comes or goes. AeroSpace has no event for a
+        closed window, so this is what makes an icon disappear when its window closes."""
+        while True:
+            started = time.time()
+            try:
+                p = subprocess.Popen([FRAMES, "--watch"], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                                     text=True, bufsize=1)
+                self.children.append(p)
+                for line in p.stdout:
+                    if line.strip() == "change":
+                        self.q.put(("winchange", 0))
+                p.wait()
+                self.children.remove(p)
+            except Exception as e:
+                log("winframes watch error: %s" % e)
+            # an older winframes without --watch prints the frames and exits at once: do not respawn it in a loop
+            time.sleep(5.0 if time.time() - started < 3 else 1.0)
+
+    def request_refresh(self, delay=0.05, full=True, check_ids=False):
         """full: ask AeroSpace for everything. Not full: only re-read the window frames (the system's
         window list) and reuse the window list we already have; that is enough after a workspace
         switch, and it keeps AeroSpace free to switch (its full window listing makes it re-read every
-        app's windows, right while it is busy focusing the new one)."""
+        app's windows, right while it is busy focusing the new one).
+        check_ids: first compare the set of windows with the last look; if a window came or went it is
+        a full refresh after all."""
         if full:
             self.refresh_full = True
+        if check_ids:
+            self.refresh_check = True
         if self.refresh_pending:
             return
         self.refresh_pending = True
@@ -399,11 +450,12 @@ class Daemon:
             self.q.put(("tick", 0))
 
     # ---- workers ---------------------------------------------------------------------------
-    def refresh_worker(self, full):
+    def refresh_worker(self, full, check_ids=False):
         if not full and self.last_rows:
             frames = poll_frames()
-            if frames:
-                self.q.put(("snapshot", {"rows": self.last_rows, "focused": None, "frames": frames, "wsinfo": None}))
+            if frames and not (check_ids and self.last_ids is not None and frozenset(frames) != self.last_ids):
+                self.q.put(("snapshot", {"rows": self.last_rows, "focused": None, "frames": frames, "wsinfo": None,
+                                         "light": True}))
                 return
         snap = take_snapshot()
         if snap:
@@ -425,11 +477,11 @@ class Daemon:
                         self.q.put(("snapshot", snap))
                 return
             ids = frozenset(frames)
-            if now - self.last_switch < SWITCH_QUIET_SECONDS and self.last_ids is not None:
-                # a workspace switch moves every window on and off the screen: that is not a change of
-                # structure and not shaking, so just take the new picture as the baseline
+            if now - self.last_switch < SWITCH_QUIET_SECONDS and self.last_ids is not None and ids == self.last_ids:
+                # a workspace switch moves every window on and off the screen: that is not shaking, so
+                # take the new positions as the baseline. (Parked windows stay in the system's list, so
+                # the set of windows only differs when one really came or went: that is not skipped.)
                 tiled = {w[0] for ws in WORKSPACES for w in self.state.windows.get(ws, [])}
-                self.last_ids = ids
                 self.last_frames = hash(tuple(sorted((k, v) for k, v in frames.items() if k in tiled)))
                 return
             if ids != self.last_ids or now - self.last_full > STRUCT_POLL_SECONDS:
@@ -496,6 +548,7 @@ class Daemon:
     def apply_focus(self, wid, ws, mon=None):
         s = self.state
         prev = s.focused_ws
+        prev_id = s.focused_id
         if wid is None and ws and ws != prev:
             # 'workspace changed' can arrive before 'focus changed': AeroSpace goes back to the
             # window last focused there, so assume it now; the real event corrects it if wrong
@@ -508,6 +561,10 @@ class Daemon:
             self.request_refresh(0.1, full=False)
             # the windows are still settling at 0.1 s: read their frames once more when they are done
             threading.Timer(0.7, lambda: self.request_refresh(0.0, full=False)).start()
+        elif wid and prev_id and wid != prev_id:
+            # Another window of this workspace got the focus. AeroSpace has no event for a closed window,
+            # but closing the focused one ends here: look at the system's window list (cheap) to see.
+            self.request_refresh(0.15, full=False, check_ids=True)
         if wid and wid not in s.app_of:
             self.request_refresh()
 
@@ -589,8 +646,13 @@ class Daemon:
 
     def handle(self, kind, payload):
         s = self.state
-        if DEBUG and kind in ("event", "settle", "snapshot"):
-            log("DBG %s %s" % (kind, json.dumps(payload) if kind == "event" else ""))
+        if DEBUG and kind in ("event", "settle", "snapshot", "terminated", "refresh"):
+            extra = json.dumps(payload) if kind == "event" else ""
+            if kind == "snapshot":
+                extra = "rows=%d light=%s apps=%s" % (len(payload["rows"]), bool(payload.get("light")), sorted({r[4] for r in payload["rows"]}))[:160]
+            elif kind == "terminated":
+                extra = payload
+            log("DBG %s %s" % (kind, extra))
         if kind == "settle":
             if self.pending:
                 wid, ws, mon = self.pending
@@ -632,15 +694,24 @@ class Daemon:
                 self.request_refresh(0.15)
         elif kind == "mac":
             self.on_mac_activate(*payload)
+        elif kind == "winchange":
+            self.request_refresh(0.1)          # a window came or went
+        elif kind == "terminated":
+            self.request_refresh(0.2)          # an app quit: its icons must go (AeroSpace has no event for it)
         elif kind == "guard":
             self.check_guard(*payload)
         elif kind == "snapshot":
             s.apply_snapshot(payload)
             self.last_rows = payload["rows"]
+            if payload.get("frames") and not payload.get("light"):
+                # the baseline for "did the set of windows change": only from a look at AeroSpace's window
+                # list (a light refresh reuses the old list, so a window closed meanwhile would be hidden)
+                self.last_ids = frozenset(payload["frames"])
         elif kind == "refresh":
             self.refresh_pending = False
             full, self.refresh_full = self.refresh_full, False
-            threading.Thread(target=self.refresh_worker, args=(full,), daemon=True).start()
+            check, self.refresh_check = self.refresh_check, False
+            threading.Thread(target=self.refresh_worker, args=(full, check), daemon=True).start()
         elif kind == "tick":
             if not self.poll_busy:
                 self.poll_busy = True
@@ -676,6 +747,7 @@ class Daemon:
         signal.signal(signal.SIGTERM, self.stop_children)
         threading.Thread(target=self.subscribe_loop, daemon=True).start()
         threading.Thread(target=self.appwatch_loop, daemon=True).start()
+        threading.Thread(target=self.winwatch_loop, daemon=True).start()
         threading.Thread(target=self.ticker, daemon=True).start()
         self.loop()
 
@@ -713,13 +785,14 @@ def take_lock(replace):
 
 def reap_orphans():
     """After a hard kill (kill -9) an earlier instance leaves its helper processes without a parent.
-    Stop the ones that are exactly ours: the event subscription and the app watcher."""
+    Stop the ones that are exactly ours: the event subscription and the app and window watchers."""
     for l in run(["/bin/ps", "-axo", "pid=,ppid=,command="]).splitlines():
         parts = l.split(None, 2)
         if len(parts) < 3 or parts[1] != "1":
             continue
         cmd = parts[2]
-        if cmd.startswith(AEROSPACE + " subscribe focus-changed focused-workspace-changed") or cmd.split()[0] == APPWATCH:
+        if (cmd.startswith(AEROSPACE + " subscribe focus-changed focused-workspace-changed") or cmd.split()[0] == APPWATCH
+                or cmd.startswith(FRAMES + " --watch")):
             try:
                 os.kill(int(parts[0]), signal.SIGTERM)
             except OSError:

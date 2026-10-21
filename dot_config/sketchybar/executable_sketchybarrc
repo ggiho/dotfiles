@@ -214,12 +214,13 @@ sketchybar --add bracket status wifi volume_icon battery \
            --set status "${status[@]}"
 
 # CPU (share of all cores) and memory (used GB, colored by macOS memory pressure), left of the battery.
+# A short text tag instead of an icon: two chip-like icons were easy to mix up.
 # One helper call per refresh updates both: the script is on cpu and sets mem too.
 cpu=(
-  icon=󰓅
-  icon.font="$FONT:Regular:15.0"
-  icon.padding_left=6
-  icon.padding_right=3
+  icon=CPU
+  icon.font="$FONT:Bold:10.0"
+  icon.padding_left=8
+  icon.padding_right=4
   label="--%"
   label.width=34
   label.align=left
@@ -234,10 +235,10 @@ cpu=(
   popup.background.border_color=$CAT_SURFACE1
 )
 mem=(
-  icon=󰍛
-  icon.font="$FONT:Regular:15.0"
-  icon.padding_left=6
-  icon.padding_right=3
+  icon=MEM
+  icon.font="$FONT:Bold:10.0"
+  icon.padding_left=8
+  icon.padding_right=4
   label="--G"
   label.width=42
   label.align=left
