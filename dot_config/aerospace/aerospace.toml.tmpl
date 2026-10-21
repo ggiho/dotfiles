@@ -32,7 +32,9 @@ persistent-workspaces = ['1', '2', '3', '4']
 enable-normalization-flatten-containers = true
 enable-normalization-opposite-orientation-for-nested-containers = true
 
-accordion-padding = 0
+# Workspace 3 (the small MacBook screen) is an accordion: one window big, the others peek out
+# at the edge, so apps with large minimum sizes never overlap.
+accordion-padding = 30
 default-root-container-layout = 'tiles'
 default-root-container-orientation = 'auto'
 
@@ -173,21 +175,21 @@ run = 'move-node-to-workspace 2'
 # 3: work tools
 [[on-window-detected]]
 if.app-id = 'com.jetbrains.datagrip'
-run = 'move-node-to-workspace 3'
+run = ['move-node-to-workspace 3', 'layout v_accordion']
 
 [[on-window-detected]]
 if.app-id = 'md.obsidian'
-run = 'move-node-to-workspace 3'
+run = ['move-node-to-workspace 3', 'layout v_accordion']
 
 # 4: messengers
 [[on-window-detected]]
 if.app-id = 'com.tinyspeck.slackmacgap'
 run = 'move-node-to-workspace 4'
 
-# Tiled, no workspace assignment
+# Tiled, always on 1 (next to the browser)
 [[on-window-detected]]
 if.app-id = 'com.microsoft.Outlook'
-run = 'layout tiling'
+run = ['layout tiling', 'move-node-to-workspace 1']
 
 # KakaoTalk stays a small floating window
 [[on-window-detected]]

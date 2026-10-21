@@ -301,7 +301,8 @@ class Daemon:
         self.children = []         # helper processes to stop together with this one
         self.mac_front = None      # app macOS last activated
         self.aero_focus = (0.0, None)   # (time, app) of the last AeroSpace focus-changed event
-        self.guard = None          # (app, time, bounced): an app the user just activated
+        self.aero_recent = []      # (time, app) of recent AeroSpace focus-changed events
+        self.guard = None          # (app, time, bounced, seen): an app the user just activated
         self.last_fix = 0.0
 
     # ---- producers -------------------------------------------------------------------------
@@ -456,19 +457,28 @@ class Daemon:
         self.apply_focus(wid, ws, mon)
 
     # ---- activation guard --------------------------------------------------------------------
-    # Clicking an app that lives on another workspace (Dock, Cmd+Tab, Raycast) makes macOS activate
-    # it first and AeroSpace follow. AeroSpace asks the app for its focused window over the
-    # accessibility API; a slow app (DataGrip, a busy Chrome) does not answer in time, so AeroSpace
-    # falls back to the previously focused window and the click seems to be undone. If the app does
-    # not end up focused shortly after such an activation, focus its window explicitly (once).
+    # Clicking an app that lives on a hidden workspace in the Dock makes macOS activate it, and
+    # AeroSpace follows. But with an auto-hidden Dock, AeroSpace's mouse-up handler takes the Dock
+    # click for a click on the bare desktop of that monitor and focuses the workspace that is
+    # visible there, so the click first lands on the wrong workspace (and that focus' activation can
+    # arrive late and pull it back again). See AeroSpace GlobalObserver.swift / discussion #2223.
+    # Turning the Dock's auto-hide off removes the cause; this guard repairs the result instead:
+    # if the app does not end up focused shortly after the activation, focus its window (once).
     def on_mac_activate(self, name, t):
         self.mac_front = name
         aero_t, aero_app = self.aero_focus
-        if aero_app == name and t - aero_t < 0.25:
-            return                  # AeroSpace focused this app itself; macOS is just catching up
+        if DEBUG:
+            log("DBG mac activate %s (last aero focus: %s, %.0f ms earlier)" % (name, aero_app, (t - aero_t) * 1000))
+        # If AeroSpace itself focused this app a moment ago (not only as its very last move: it can
+        # try one window, correct itself, and the first activation arrives late), macOS is just
+        # catching up and this is not the user asking for the app.
+        if any(a == name and t - ta < 0.6 for ta, a in self.aero_recent):
+            if DEBUG:
+                log("DBG mac activate %s ignored: AeroSpace focused it recently" % name)
+            return
         # the focus-changed that undoes the click can reach us a hair before the activation itself
         bounced = aero_app is not None and aero_app != name and t - aero_t < 0.05
-        self.guard = (name, t, bounced)
+        self.guard = (name, t, bounced, False)
         threading.Timer(GUARD_SECONDS, lambda: self.q.put(("guard", (name, t)))).start()
 
     def guard_target(self, name):
@@ -484,14 +494,21 @@ class Daemon:
     def check_guard(self, name, t):
         g = self.guard
         if not g or g[0] != name or g[1] != t:
+            if DEBUG:
+                log("DBG guard-check %s: skipped (newer activation took over)" % name)
             return                  # a newer activation took over
         self.guard = None
         # the latest raw AeroSpace event, not the bar's state (which holds back flicker for a moment)
         focused_app = self.aero_focus[1]
+        if DEBUG:
+            log("DBG guard-check %s: aero_focus=%s mac_front=%s bounced=%s" % (name, focused_app, self.mac_front, g[2]))
         if focused_app == name and self.mac_front == name:
             return                  # it worked
         if not g[2]:
             return                  # AeroSpace never moved the focus elsewhere: not this problem
+        self.fix_focus(name, focused_app)
+
+    def fix_focus(self, name, focused_app):
         wid = self.guard_target(name)
         now = time.time()
         if wid is None or now - self.last_fix < GUARD_GAP:
@@ -517,8 +534,23 @@ class Daemon:
                 app = s.app_of.get(wid)
                 now = time.time()
                 self.aero_focus = (now, app)
-                if self.guard and app is not None and app != self.guard[0] and now - self.guard[1] < GUARD_SECONDS + 0.4:
-                    self.guard = (self.guard[0], self.guard[1], True)
+                self.aero_recent = [(ta, a) for ta, a in self.aero_recent if now - ta < 2.0]
+                if app:
+                    self.aero_recent.append((now, app))
+                g = self.guard
+                if g and now - g[1] < GUARD_SECONDS + 0.4:
+                    if app == g[0]:
+                        self.guard = (g[0], g[1], g[2], True)
+                    elif app is not None:
+                        if g[3]:
+                            # it reached the app and then moved away again (e.g. it followed a late
+                            # activation of another app): put the focus back now, not after the timer
+                            self.guard = None
+                            if DEBUG:
+                                log("DBG guard %s: focus left the app again; fixing at once" % g[0])
+                            self.fix_focus(g[0], app)
+                        else:
+                            self.guard = (g[0], g[1], True, g[3])
                 self.on_focus_event(wid, payload.get("workspace"))
             elif e == "focused-workspace-changed":
                 self.on_focus_event(None, payload.get("workspace"))
