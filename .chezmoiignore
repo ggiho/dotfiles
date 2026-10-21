@@ -68,6 +68,7 @@ Library/Preferences/org.pqrs.Karabiner-Updater.plist
 .config/sketchybar/helper/winframes
 .config/sketchybar/helper/appwatch
 .config/sketchybar/helper/sysstat
+.config/aerospace/resize
 .config/sketchybar/.omc/**
 .config/sketchybar/**/.omc/**
 .config/aerospace/.omc/**

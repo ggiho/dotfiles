@@ -85,6 +85,12 @@ alt-cmd-h = ['fullscreen off', 'move left']
 alt-cmd-j = ['fullscreen off', 'move down']
 alt-cmd-k = ['fullscreen off', 'move up']
 alt-cmd-l = ['fullscreen off', 'move right']
+# Resize with alt-shift-hjkl: the key pushes that edge of the window, so it grows if a neighbour is on that side
+# and shrinks otherwise; a held key keeps going (see resize.swift, AeroSpace ignores repeated key events).
+alt-shift-h = 'exec-and-forget $HOME/.config/aerospace/resize h'
+alt-shift-l = 'exec-and-forget $HOME/.config/aerospace/resize l'
+alt-shift-j = 'exec-and-forget $HOME/.config/aerospace/resize j'
+alt-shift-k = 'exec-and-forget $HOME/.config/aerospace/resize k'
 
 # Monitors: focus prev/next display (windows go to a monitor via the workspace keys below)
 alt-cmd-comma = 'focus-monitor --wrap-around prev'
@@ -106,6 +112,7 @@ alt-cmd-p = 'move-node-to-workspace --focus-follows-window 4'
 # Layout / fullscreen
 alt-cmd-backslash = 'layout tiles horizontal vertical'
 alt-cmd-m = 'fullscreen'
+alt-cmd-t = 'layout floating tiling'     # toggle the focused window between floating and tiled
 
 # Resize the focused window; shift = reset all sizes in the workspace to equal
 alt-cmd-minus = 'resize smart -50'
@@ -123,6 +130,10 @@ alt-cmd-h = ['fullscreen off', 'move left']
 alt-cmd-j = ['fullscreen off', 'move down']
 alt-cmd-k = ['fullscreen off', 'move up']
 alt-cmd-l = ['fullscreen off', 'move right']
+alt-shift-h = 'exec-and-forget $HOME/.config/aerospace/resize h'
+alt-shift-l = 'exec-and-forget $HOME/.config/aerospace/resize l'
+alt-shift-j = 'exec-and-forget $HOME/.config/aerospace/resize j'
+alt-shift-k = 'exec-and-forget $HOME/.config/aerospace/resize k'
 alt-cmd-comma = 'focus-monitor --wrap-around prev'
 alt-cmd-period = 'focus-monitor --wrap-around next'
 alt-u = 'workspace 1'
@@ -135,6 +146,7 @@ alt-cmd-o = 'move-node-to-workspace --focus-follows-window 3'
 alt-cmd-p = 'move-node-to-workspace --focus-follows-window 4'
 alt-cmd-backslash = 'layout tiles horizontal vertical'
 alt-cmd-m = 'fullscreen'
+alt-cmd-t = 'layout floating tiling'     # toggle the focused window between floating and tiled
 alt-cmd-minus = 'resize smart -50'
 alt-cmd-equal = 'resize smart +50'
 alt-cmd-shift-equal = 'balance-sizes'

@@ -3,6 +3,7 @@
 #   winframes  window frames (shake detection / screen order)
 #   appwatch   app activations (activation guard)
 #   sysstat    CPU and memory for the bar
+#   resize     alt-shift-hjkl in AeroSpace (config dir aerospace, not sketchybar)
 #
 # The compiled binaries are machine-specific (architecture, toolchain), so only the Swift sources
 # are tracked in git; the binaries are compiled here and rebuilt whenever a source changes.
@@ -10,6 +11,7 @@
 # winframes.swift hash: {{ include "dot_config/sketchybar/helper/winframes.swift" | sha256sum }}
 # appwatch.swift hash: {{ include "dot_config/sketchybar/helper/appwatch.swift" | sha256sum }}
 # sysstat.swift hash: {{ include "dot_config/sketchybar/helper/sysstat.swift" | sha256sum }}
+# resize.swift hash: {{ include "dot_config/aerospace/resize.swift" | sha256sum }}
 set -euo pipefail
 
 if ! command -v swiftc >/dev/null 2>&1; then
@@ -17,9 +19,9 @@ if ! command -v swiftc >/dev/null 2>&1; then
   exit 0
 fi
 
-for name in winframes appwatch sysstat; do
-  SRC="$HOME/.config/sketchybar/helper/$name.swift"
-  OUT="$HOME/.config/sketchybar/helper/$name"
+for entry in sketchybar/helper/winframes sketchybar/helper/appwatch sketchybar/helper/sysstat aerospace/resize; do
+  SRC="$HOME/.config/$entry.swift"
+  OUT="$HOME/.config/$entry"
   [ -f "$SRC" ] || continue
   # Build next to the target and move into place, so a running wsbar.py never sees a half-written binary
   swiftc -O "$SRC" -o "$OUT.new"

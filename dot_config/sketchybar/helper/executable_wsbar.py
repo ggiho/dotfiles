@@ -35,6 +35,7 @@ APPWATCH = CONFIG_DIR + "/helper/appwatch"
 WORKSPACES = ["1", "2", "3", "4"]
 BASE_SLOTS = 8                  # slots the rc creates; more are added on demand
 POLL_SECONDS = 3.0
+INPUT_QUIET_SECONDS = 5.0         # after one of the user's key bindings, moved windows are not a shake
 SWITCH_QUIET_SECONDS = 4.0        # after a workspace switch the periodic check only re-baselines
 STRUCT_POLL_SECONDS = 60.0      # how often AeroSpace is asked for the full window list when nothing seems to change
 HEAL_SECONDS = 20.0
@@ -356,6 +357,7 @@ class Daemon:
         self.cooldown = {}       # window id -> time last floated
         self.last_heal = time.time()
         self.last_switch = 0.0
+        self.last_input = 0.0        # when the user last triggered an AeroSpace key binding
         self.pending = None
         self.children = []         # helper processes to stop together with this one
         self.mac_front = None      # app macOS last activated
@@ -369,7 +371,7 @@ class Daemon:
         while True:
             try:
                 p = subprocess.Popen([AEROSPACE, "subscribe", "focus-changed", "focused-workspace-changed",
-                                      "focused-monitor-changed", "window-detected"],
+                                      "focused-monitor-changed", "window-detected", "binding-triggered"],
                                      stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, bufsize=1)
                 self.children.append(p)
                 log("subscribed to AeroSpace events")
@@ -498,6 +500,16 @@ class Daemon:
             fsig = hash(tuple(sorted((k, v) for k, v in frames.items() if k in tiled_ids)))
             fresh = {k: t for k, t in self.suspects.items() if now - t < 30}
             self.suspects = fresh
+            if now - self.last_input < INPUT_QUIET_SECONDS:
+                # The user is moving or resizing windows with the keys (swapping two windows back and forth
+                # looks exactly like a shake). That is not a fight with an app: only redraw the bar.
+                self.suspects.clear()
+                if fsig != self.last_frames:
+                    self.last_frames = fsig
+                    snap = take_snapshot()
+                    if snap:
+                        self.q.put(("snapshot", snap))
+                return
             if fsig != self.last_frames or fresh:
                 refresh = fsig != self.last_frames
                 self.last_frames = fsig
@@ -688,6 +700,8 @@ class Daemon:
                 self.on_focus_event(None, payload.get("workspace"))
             elif e == "focused-monitor-changed":
                 self.on_focus_event(None, payload.get("workspace"), payload.get("monitorId"))
+            elif e == "binding-triggered":
+                self.last_input = time.time()
             elif e == "window-detected":
                 wid = str(payload.get("windowId"))
                 s.app_of[wid] = payload.get("appName", "")
@@ -757,7 +771,7 @@ def take_lock(replace):
     `replace` an older instance is asked to quit and this one takes over; without it this one
     just gives up. (Checking a pid file and then writing it let two starts that happen at the
     same moment both win.) Returns the open file, which must stay open for the process lifetime."""
-    f = open(PIDFILE, "a+")
+    f = os.fdopen(os.open(PIDFILE, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600), "r+")
     deadline = time.time() + 3.0
     asked = None
     while True:
