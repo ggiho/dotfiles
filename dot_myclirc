@@ -137,8 +137,8 @@ wider_completion_menu = False
 # \A - DSN alias name (from the [alias_dsn] section)
 # \u - Username
 # \x1b[...m - insert ANSI escape sequence
-# Catppuccin Mocha — peach user / green host / blue db / mauve arrow (two-line)
-prompt = "\x1b[38;2;250;179;135m\u\x1b[38;2;108;112;134m@\x1b[38;2;166;227;161m\h\x1b[38;2;108;112;134m:\x1b[38;2;137;180;250m\d\x1b[0m\n\x1b[38;2;203;166;247m>\x1b[0m "
+# Catppuccin Mocha — plain user / blue host (red on PROD via db) / peach db / mauve arrow (two-line)
+prompt = "\u\x1b[38;2;108;112;134m@\x1b[38;2;137;180;250m\h\x1b[38;2;108;112;134m:\x1b[38;2;250;179;135m\d\x1b[0m\n\x1b[38;2;203;166;247m>\x1b[0m "
 prompt_continuation = ->
 
 # Skip intro info on startup and outro info on exit
@@ -161,7 +161,12 @@ enable_pager = True
 # -S chops long lines instead of wrapping them, so wide result sets scroll
 # sideways with the arrow keys. mycli only presets LESS=-RXF (no -S), which is
 # why wide tables wrapped here but not in pgcli (it uses -SRXF).
-pager = less -S
+# -+X undoes LESS's -X so less draws on the alternate screen: under tmux's
+# scroll-on-clear every repaint (e.g. scrolling right) would otherwise push a
+# screenful into scrollback. --redraw-on-quit leaves the last screen visible.
+# -c paints from the top: a result shorter than the screen is otherwise drawn
+# at the bottom and jumps to the top on the first repaint (e.g. scrolling right).
+pager = less -S -c -+X --redraw-on-quit
 
 # Whether to store and retrieve passwords from the system keyring.
 # See the documentation for https://pypi.org/project/keyring/ for your OS.

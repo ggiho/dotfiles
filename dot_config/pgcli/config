@@ -120,7 +120,12 @@ search_path_filter = False
 # Default pager. See https://www.pgcli.com/pager for more information on settings.
 # By default 'PAGER' environment variable is used. If the pager is less, and the 'LESS'
 # environment variable is not set, then LESS='-SRXF' will be automatically set.
-# pager = less
+# -+X undoes that -X so less draws on the alternate screen: under tmux's
+# scroll-on-clear every repaint (e.g. scrolling right) would otherwise push a
+# screenful into scrollback. --redraw-on-quit leaves the last screen visible.
+# -c paints from the top: a result shorter than the screen is otherwise drawn
+# at the bottom and jumps to the top on the first repaint (e.g. scrolling right).
+pager = less -c -+X --redraw-on-quit
 
 # Timing of sql statements and table rendering.
 timing = True
@@ -183,8 +188,8 @@ verbose_errors = False
 # \dsn_alias - name of dsn connection string alias if -D option is used (empty otherwise)
 # \x1b[...m - insert ANSI escape sequence
 # eg: prompt = '\x1b[35m\u@\x1b[32m\h:\x1b[36m\d>'
-# Catppuccin Mocha — peach user / green host / blue db / mauve arrow
-prompt = '\x1b[38;2;250;179;135m\u\x1b[38;2;108;112;134m@\x1b[38;2;166;227;161m\h\x1b[38;2;108;112;134m:\x1b[38;2;137;180;250m\d\x1b[38;2;243;139;168m\T\x1b[0m\n\x1b[38;2;203;166;247m>\x1b[0m '
+# Catppuccin Mocha — plain user / green host (red on PROD via db) / peach db / mauve arrow
+prompt = '\u\x1b[38;2;108;112;134m@\x1b[38;2;166;227;161m\h\x1b[38;2;108;112;134m:\x1b[38;2;250;179;135m\d\x1b[38;2;243;139;168m\T\x1b[0m\n\x1b[38;2;203;166;247m>\x1b[0m '
 
 # Number of lines to reserve for the suggestion menu
 min_num_menu_lines = 4
