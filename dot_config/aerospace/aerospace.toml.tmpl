@@ -212,12 +212,12 @@ run = ['layout tiling', 'move-node-to-workspace 1']
 # KakaoTalk stays a small floating window
 [[on-window-detected]]
 if.app-id = 'com.kakao.KakaoTalkMac'
-run = ['layout floating', 'move-node-to-workspace 4']
+run = ['layout floating', 'move-node-to-workspace 4', 'exec-and-forget $HOME/.config/aerospace/keepbelow']
 
 # Everything else floats
 [[on-window-detected]]
 if = 'true'
-run = 'layout floating'
+run = ['layout floating', 'exec-and-forget $HOME/.config/aerospace/keepbelow']
 {{- else }}
 # Other Macs keep tiling the apps they had before the work Mac's "float everything else" policy.
 # App -> workspace assignment (applies when a window opens)
@@ -259,7 +259,7 @@ run = 'move-node-to-workspace 3'
 # 4: messengers (KakaoTalk stays a small floating window)
 [[on-window-detected]]
 if.app-id = 'com.kakao.KakaoTalkMac'
-run = ['layout floating', 'move-node-to-workspace 4']
+run = ['layout floating', 'move-node-to-workspace 4', 'exec-and-forget $HOME/.config/aerospace/keepbelow']
 
 [[on-window-detected]]
 if.app-id = 'com.tinyspeck.slackmacgap'
@@ -272,21 +272,21 @@ run = 'move-node-to-workspace 4'
 # Always floating
 [[on-window-detected]]
 if.app-id = 'com.runjuu.Input-Source-Pro'
-run = 'layout floating'
+run = ['layout floating', 'exec-and-forget $HOME/.config/aerospace/keepbelow']
 
 [[on-window-detected]]
 if.app-id = 'com.apple.systempreferences'
-run = 'layout floating'
+run = ['layout floating', 'exec-and-forget $HOME/.config/aerospace/keepbelow']
 
 [[on-window-detected]]
 if.app-id = 'com.apple.ActivityMonitor'
-run = 'layout floating'
+run = ['layout floating', 'exec-and-forget $HOME/.config/aerospace/keepbelow']
 
 [[on-window-detected]]
 if.app-id = 'com.apple.Preview'
-run = 'layout floating'
+run = ['layout floating', 'exec-and-forget $HOME/.config/aerospace/keepbelow']
 
 [[on-window-detected]]
 if.app-id = 'us.zoom.xos'
-run = 'layout floating'
+run = ['layout floating', 'exec-and-forget $HOME/.config/aerospace/keepbelow']
 {{- end }}

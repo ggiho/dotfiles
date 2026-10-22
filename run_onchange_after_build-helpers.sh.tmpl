@@ -4,6 +4,7 @@
 #   appwatch   app activations (activation guard)
 #   sysstat    CPU and memory for the bar
 #   resize     alt-shift-hjkl in AeroSpace (config dir aerospace, not sketchybar)
+#   keepbelow  moves new floating windows from under the bar (run by AeroSpace's window-detected rules)
 #
 # The compiled binaries are machine-specific (architecture, toolchain), so only the Swift sources
 # are tracked in git; the binaries are compiled here and rebuilt whenever a source changes.
@@ -12,6 +13,7 @@
 # appwatch.swift hash: {{ include "dot_config/sketchybar/helper/appwatch.swift" | sha256sum }}
 # sysstat.swift hash: {{ include "dot_config/sketchybar/helper/sysstat.swift" | sha256sum }}
 # resize.swift hash: {{ include "dot_config/aerospace/resize.swift" | sha256sum }}
+# keepbelow.swift hash: {{ include "dot_config/aerospace/keepbelow.swift" | sha256sum }}
 set -euo pipefail
 
 if ! command -v swiftc >/dev/null 2>&1; then
@@ -19,7 +21,7 @@ if ! command -v swiftc >/dev/null 2>&1; then
   exit 0
 fi
 
-for entry in sketchybar/helper/winframes sketchybar/helper/appwatch sketchybar/helper/sysstat aerospace/resize; do
+for entry in sketchybar/helper/winframes sketchybar/helper/appwatch sketchybar/helper/sysstat aerospace/resize aerospace/keepbelow; do
   SRC="$HOME/.config/$entry.swift"
   OUT="$HOME/.config/$entry"
   [ -f "$SRC" ] || continue
