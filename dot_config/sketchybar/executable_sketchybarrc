@@ -89,6 +89,15 @@ apple_logo=(
   padding_right=8
   click_script="$PLUGIN_DIR/barpopup.sh apple.logo"
   popup.height=35
+  popup.background.color=$CAT_BASE
+  popup.background.border_color=$CAT_SURFACE1
+)
+
+# the rows of the Apple menu look like the rows of the cpu and mem popups
+apple_row=(
+  icon.color=$CAT_SUBTEXT0
+  label.color=$CAT_TEXT
+  background.drawing=off
 )
 
 apple_prefs=(
@@ -112,11 +121,11 @@ apple_lock=(
 sketchybar --add item apple.logo left \
            --set apple.logo "${apple_logo[@]}" \
            --add item apple.prefs popup.apple.logo \
-           --set apple.prefs "${apple_prefs[@]}" \
+           --set apple.prefs "${apple_row[@]}" "${apple_prefs[@]}" \
            --add item apple.activity popup.apple.logo \
-           --set apple.activity "${apple_activity[@]}" \
+           --set apple.activity "${apple_row[@]}" "${apple_activity[@]}" \
            --add item apple.lock popup.apple.logo \
-           --set apple.lock "${apple_lock[@]}" \
+           --set apple.lock "${apple_row[@]}" "${apple_lock[@]}" \
            --move apple.logo before space.1
 
 front_app=(

@@ -15,6 +15,7 @@ per change, so everything changes at the same moment.
 Set WSBAR_DRYRUN=1 to log the sketchybar calls instead of sending them.
 """
 import fcntl
+import itertools
 import json
 import os
 import queue
@@ -39,6 +40,7 @@ INPUT_QUIET_SECONDS = 5.0         # after one of the user's key bindings, moved 
 SWITCH_QUIET_SECONDS = 4.0        # after a workspace switch the periodic check only re-baselines
 STRUCT_POLL_SECONDS = 60.0      # how often AeroSpace is asked for the full window list when nothing seems to change
 HEAL_SECONDS = 20.0
+RECHECK_SECONDS = 1.0           # a second look when AeroSpace still lists a window the system no longer has
 COALESCE_SECONDS = 0.008        # wait this long for sibling events before drawing
 SETTLE_SECONDS = 0.35           # hold window after a switch (see on_focus_event)
 GUARD_SECONDS = 0.6             # how long after a click on an app we wait before checking it got focus
@@ -264,7 +266,12 @@ class State:
         for ws in WORKSPACES:
             tiled = [r for r in rows if r[1] == ws and r[2] != "floating" and "minimized" not in r[2]]
             prev_order = [w[0] for w in self.windows.get(ws, [])]
-            if ws in shown:
+            if ws in shown and any("accordion" in r[2] for r in tiled):
+                # The frames of an accordion follow the focus (the focused window moves in front of the others),
+                # so sorting by them reorders the icons at every focus move and the highlight jumps around.
+                # AeroSpace lists the windows of a workspace in layout order, which does not change: keep it.
+                pass
+            elif ws in shown:
                 # real screen order: left to right, then top to bottom
                 def key(r):
                     f = frames.get(r[0])
@@ -314,8 +321,13 @@ def poll_frames():
     return parse_frames(run([FRAMES]))
 
 
+_TICKETS = itertools.count(1)
+
+
 def take_snapshot():
-    """All the slow lookups, in parallel. Returns a dict, or None if AeroSpace did not answer."""
+    """All the slow lookups, in parallel. Returns a dict, or None if AeroSpace did not answer.
+    The dict carries a ticket, numbered when the look started (see Daemon.handle, "snapshot")."""
+    ticket = next(_TICKETS)
     with ThreadPoolExecutor(max_workers=4) as ex:
         f_all = ex.submit(run, [AEROSPACE, "list-windows", "--all", "--format", WINDOW_FORMAT])
         f_foc = ex.submit(run, [AEROSPACE, "list-windows", "--focused", "--format",
@@ -337,7 +349,7 @@ def take_snapshot():
         q = l.split("|")
         if len(q) == 3:
             wsinfo[q[0]] = (int(q[1]), q[2] == "true")
-    return {"rows": rows, "focused": focused, "frames": frames, "wsinfo": wsinfo}
+    return {"rows": rows, "focused": focused, "frames": frames, "wsinfo": wsinfo, "ticket": ticket}
 
 
 class Daemon:
@@ -356,6 +368,9 @@ class Daemon:
         self.suspects = {}       # window id -> time first flagged
         self.cooldown = {}       # window id -> time last floated
         self.last_heal = time.time()
+        self.recheck_pending = False
+        self.verify_after = False     # a window or app went: the next full look is checked against the system's list
+        self.applied_ticket = 0       # the newest look at the system that has been shown
         self.last_switch = 0.0
         self.last_input = 0.0        # when the user last triggered an AeroSpace key binding
         self.pending = None
@@ -446,6 +461,14 @@ class Daemon:
         self.refresh_pending = True
         threading.Timer(delay, lambda: self.q.put(("refresh", 0))).start()
 
+    def recheck_later(self):
+        """AeroSpace can still list a window for a moment after it closed, so the look that follows a change
+        may show the old state. One more look a second later settles it."""
+        if self.recheck_pending:
+            return
+        self.recheck_pending = True
+        threading.Timer(RECHECK_SECONDS, lambda: self.q.put(("recheck", 0))).start()
+
     def ticker(self):
         while True:
             time.sleep(POLL_SECONDS)
@@ -454,10 +477,11 @@ class Daemon:
     # ---- workers ---------------------------------------------------------------------------
     def refresh_worker(self, full, check_ids=False):
         if not full and self.last_rows:
+            ticket = next(_TICKETS)
             frames = poll_frames()
             if frames and not (check_ids and self.last_ids is not None and frozenset(frames) != self.last_ids):
                 self.q.put(("snapshot", {"rows": self.last_rows, "focused": None, "frames": frames, "wsinfo": None,
-                                         "light": True}))
+                                         "light": True, "ticket": ticket}))
                 return
         snap = take_snapshot()
         if snap:
@@ -710,12 +734,29 @@ class Daemon:
             self.on_mac_activate(*payload)
         elif kind == "winchange":
             self.request_refresh(0.1)          # a window came or went
+            self.verify_after = True
         elif kind == "terminated":
             self.request_refresh(0.2)          # an app quit: its icons must go (AeroSpace has no event for it)
+            self.verify_after = True
+        elif kind == "recheck":
+            self.recheck_pending = False
+            self.request_refresh(0.05)
         elif kind == "guard":
             self.check_guard(*payload)
         elif kind == "snapshot":
+            # Looks run in parallel threads and can arrive in any order. One that started before the one already
+            # shown carries older facts (e.g. a window AeroSpace still listed a moment after it closed): showing
+            # it would bring back what was just fixed, and nothing would look again for a minute.
+            if payload.get("ticket", 0) < self.applied_ticket:
+                return
+            self.applied_ticket = payload.get("ticket", 0)
             s.apply_snapshot(payload)
+            if self.verify_after and not payload.get("light"):
+                self.verify_after = False
+                # AeroSpace lists a window that the system no longer has: it has not caught up yet (or the app is
+                # hidden). Look once more a second later; when the two agree nothing more is asked of AeroSpace.
+                if any(r[0] not in payload["frames"] for r in payload["rows"] if "minimized" not in r[2]):
+                    self.recheck_later()
             self.last_rows = payload["rows"]
             if payload.get("frames") and not payload.get("light"):
                 # the baseline for "did the set of windows change": only from a look at AeroSpace's window
