@@ -58,6 +58,7 @@ chezmoi add ~/.config/brew/Brewfile
 | `run_once_bootstrap.sh` | Brewfile로 패키지 설치 (최초 1회) |
 | `run_onchange_macos-defaults.sh` | macOS 시스템 설정 (변경 시 재실행) |
 | `run_onchange_after_claude-notify-hooks.sh` | Claude Code 알림 hook을 settings.json에 병합 |
+| `run_onchange_after_install-ddb-tui.sh` | ddb-tui 릴리스 바이너리 설치 + `ddb` 링크 (버전 바꾸면 재실행) |
 | `dot_claude/hooks/` | Claude Code 알림 hook 스크립트 |
 | `dot_zshrc` | zsh 설정 |
 | `dot_config/wezterm/` | WezTerm 설정 |
