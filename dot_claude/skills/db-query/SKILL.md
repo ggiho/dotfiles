@@ -37,6 +37,10 @@ dbq "OnTheGo SQA" "SHOW TABLES FROM otg"
 2. Pick the display name. Matching is **case-insensitive and partial**, but
    exact match wins. A partial name that hits several servers (e.g. `Horizon`)
    errors and lists the candidates — be more specific (`Horizon DEV`).
+   **PROD servers need the full display name** (any name with `PROD` as a
+   word, case-insensitive): a partial name that would land on one (e.g.
+   `datamart` → `DataMart PROD`) is refused and the error shows the exact name
+   to use. Only pass that name if the user really means PROD.
 3. Run `dbq "<name>" "<SQL>"`. `dbq` prints `[dbq] <name> -> host:port (type)`
    to stderr so you can confirm which server you hit.
 
@@ -44,7 +48,8 @@ dbq "OnTheGo SQA" "SHOW TABLES FROM otg"
 
 - **MySQL entries usually have no default database.** Fully-qualify tables as
   `schema.table` (e.g. `claims.ClaimDetail`), or the query fails with "No
-  database selected". (An entry may pin a default DB as its 6th field.)
+  database selected". (An entry may pin a default DB as its 6th field; it is
+  used for MySQL and PostgreSQL alike.)
 - **Redshift.** The database is `datamart`. Redshift is case-sensitive and needs
   three-part table names and double-quoted UPPERCASE columns — for the full
   conversion rules use the **`mysql-to-redshift`** skill before writing Redshift SQL.

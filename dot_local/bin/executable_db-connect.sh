@@ -7,18 +7,19 @@
 # 형식: 표시명:호스트:포트:사용자명[:타입[:DB명]]
 #   - 타입 생략 또는 mysql -> mycli 로 접속 (기존 항목 그대로 호환)
 #   - 타입이 pg/postgres/postgresql -> pgcli 로 접속
-#   - DB명(선택)은 pg 접속 시에만 사용
-HOSTS_FILE="$HOME/.config/mysql/hosts"
-if [[ ! -f "$HOSTS_FILE" ]]; then
-    echo "호스트 파일이 없습니다: $HOSTS_FILE"
+#   - DB명(선택)은 접속 시 기본 DB (mycli -D / pgcli -d)
+#   - # 주석(앞 공백 허용)과 빈 줄은 무시
+# 목록 읽기/PROD 판별/Keychain 조회는 dbq 와 공용: ~/.local/lib/db-hosts.sh
+source "$HOME/.local/lib/db-hosts.sh" || exit 1
+if [[ ! -f "$DB_HOSTS_FILE" ]]; then
+    echo "호스트 파일이 없습니다: $DB_HOSTS_FILE"
     exit 1
 fi
 
 servers=()
 while IFS= read -r line; do
-    [[ -z "$line" || "$line" == \#* ]] && continue
     servers+=("$line")
-done < "$HOSTS_FILE"
+done < <(db_hosts_entries)
 
 # fzf가 설치되어 있는지 확인
 if ! command -v fzf &> /dev/null; then
@@ -48,32 +49,35 @@ dbtype="${dbtype:-mysql}"
 echo "접속 중: $display_name ($host)"
 
 # PROD면 프롬프트의 호스트(\h)를 빨강으로 (Catppuccin Mocha). 그 외엔 config 색 그대로.
-case "$display_name" in
-    *PROD) host_rgb="243;139;168" ;;
-    *)     host_rgb="" ;;
-esac
+# PROD 판별: 표시명에 PROD가 단어로 있으면 (대소문자 무시, db_is_prod)
+host_rgb=""
+db_is_prod "$display_name" && host_rgb="243;139;168"
 
 # config의 prompt 줄에서 \h 앞 색만 host_rgb로 바꿔 --prompt 인자로 만든다.
 # 프롬프트 원본은 config 한 곳에만 두기 위해 문자열을 여기 복사하지 않는다.
+# prompt 값은 따옴표('/") 또는 따옴표 없이, 뒤에 # 주석이 있어도 된다.
+# 바꾸지 못하면(config 없음, prompt 줄 없음, \h 바로 앞 색 없음) 경고만 하고 config 프롬프트로 접속.
 prompt_args=()
 env_prompt() {
-    [[ -z "$host_rgb" || ! -f "$1" ]] && return
-    local p
-    p=$(HOST_RGB="$host_rgb" perl -ne '
-        next unless /^prompt\s*=\s*([\x27"])(.*)\1\s*$/;
-        ($p = $2) =~ s/\\x1b\[[\d;]*m(?=\\h)/\\x1b[38;2;$ENV{HOST_RGB}m/;
-        print $p;' "$1")
-    [[ -n "$p" ]] && prompt_args=(--prompt "$p")
+    [[ -z "$host_rgb" ]] && return
+    local p=""
+    [[ -f "$1" ]] && p=$(HOST_RGB="$host_rgb" perl -ne '
+        next unless /^prompt\s*=\s*(?:([\x27"])(.*?)\1|([^\x27",#]*?))\s*(?:#.*)?$/;
+        $p = defined $1 ? $2 : $3;
+        print $p if $p =~ s/\\x1b\[[\d;]*m(?=\\h)/\\x1b[38;2;$ENV{HOST_RGB}m/;
+        exit;' "$1")
+    if [[ -n "$p" ]]; then
+        prompt_args=(--prompt "$p")
+    else
+        echo "경고: $1 의 prompt 에서 \\h 앞 색을 찾지 못해 PROD 색 없이 접속합니다." >&2
+    fi
 }
 
 # macOS Keychain에서 비밀번호 조회 (MySQL/PG 공용, 없으면 프롬프트로 폴백)
-DB_PASSWORD=$(security find-generic-password -s "mysql-db-connect" -a "$user" -w 2>/dev/null)
+DB_PASSWORD=$(db_password "$user")
 
 case "$dbtype" in
     pg|postgres|postgresql)
-        # Redshift는 client_encoding을 'UNICODE'로 보고 -> Python 코덱에 없어 에러.
-        # PGCLIENTENCODING=utf-8 로 libpq가 utf-8 협상하도록 강제.
-        export PGCLIENTENCODING=utf-8
         env_prompt "$HOME/.config/pgcli/config"
         if [[ -n "$DB_PASSWORD" ]]; then
             PGPASSWORD="$DB_PASSWORD" pgcli -h "$host" -p "$port" -U "$user" ${dbname:+-d "$dbname"} "${prompt_args[@]}"
@@ -87,11 +91,11 @@ case "$dbtype" in
     *)
         env_prompt "$HOME/.myclirc"
         if [[ -n "$DB_PASSWORD" ]]; then
-            MYSQL_PWD="$DB_PASSWORD" mycli -h "$host" -P "$port" -u "$user" "${prompt_args[@]}"
+            MYSQL_PWD="$DB_PASSWORD" mycli -h "$host" -P "$port" -u "$user" ${dbname:+-D "$dbname"} "${prompt_args[@]}"
         else
             echo "Keychain에 비밀번호가 없습니다. 저장하려면:"
             echo "  security add-generic-password -s \"mysql-db-connect\" -a \"$user\" -w"
-            mycli -h "$host" -P "$port" -u "$user" "${prompt_args[@]}" -p
+            mycli -h "$host" -P "$port" -u "$user" ${dbname:+-D "$dbname"} "${prompt_args[@]}" -p
         fi
         echo "MySQL 접속을 종료했습니다."
         ;;

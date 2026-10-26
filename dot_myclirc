@@ -161,12 +161,11 @@ enable_pager = True
 # -S chops long lines instead of wrapping them, so wide result sets scroll
 # sideways with the arrow keys. mycli only presets LESS=-RXF (no -S), which is
 # why wide tables wrapped here but not in pgcli (it uses -SRXF).
-# -+X undoes LESS's -X so less draws on the alternate screen: under tmux's
-# scroll-on-clear every repaint (e.g. scrolling right) would otherwise push a
-# screenful into scrollback. --redraw-on-quit leaves the last screen visible.
-# -c paints from the top: a result shorter than the screen is otherwise drawn
-# at the bottom and jumps to the top on the first repaint (e.g. scrolling right).
-pager = less -S -c -+X --redraw-on-quit
+# ~/.local/libexec/sql-pager/less wraps /usr/bin/less: alternate screen so
+# scrolling sideways does not push screenfuls into tmux's scrollback, painted
+# from the top so a short result does not jump, and the result left on screen
+# after quitting. See the script for why plain less options cannot do all three.
+pager = /Users/giho.seong/.local/libexec/sql-pager/less
 
 # Whether to store and retrieve passwords from the system keyring.
 # See the documentation for https://pypi.org/project/keyring/ for your OS.

@@ -120,12 +120,11 @@ search_path_filter = False
 # Default pager. See https://www.pgcli.com/pager for more information on settings.
 # By default 'PAGER' environment variable is used. If the pager is less, and the 'LESS'
 # environment variable is not set, then LESS='-SRXF' will be automatically set.
-# -+X undoes that -X so less draws on the alternate screen: under tmux's
-# scroll-on-clear every repaint (e.g. scrolling right) would otherwise push a
-# screenful into scrollback. --redraw-on-quit leaves the last screen visible.
-# -c paints from the top: a result shorter than the screen is otherwise drawn
-# at the bottom and jumps to the top on the first repaint (e.g. scrolling right).
-pager = less -c -+X --redraw-on-quit
+# ~/.local/libexec/sql-pager/less wraps /usr/bin/less: alternate screen so
+# scrolling sideways does not push screenfuls into tmux's scrollback, painted
+# from the top so a short result does not jump, and the result left on screen
+# after quitting. See the script for why plain less options cannot do all three.
+pager = /Users/giho.seong/.local/libexec/sql-pager/less
 
 # Timing of sql statements and table rendering.
 timing = True

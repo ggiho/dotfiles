@@ -7,14 +7,16 @@
 #   dbq --list                 사용 가능한 표시명 목록
 #
 # 표시명은 ~/.config/mysql/hosts 의 첫 필드. 부분/대소문자 무시 매칭.
+# 단, PROD 서버(표시명에 PROD가 단어로 있음)는 전체 표시명으로만 선택 (부분 매칭은 거부).
 # 접속정보 출처는 db-connect.sh 와 동일:
 #   - 서버 목록: ~/.config/mysql/hosts  (형식: 표시명:호스트:포트:사용자[:타입[:DB명]])
 #   - 비밀번호 : macOS Keychain 서비스 "mysql-db-connect", account=사용자
+#   - 목록 읽기/PROD 판별/Keychain 조회는 db-connect.sh 와 공용: ~/.local/lib/db-hosts.sh
 # 클라이언트: 타입 없음/mysql -> mysql -e, pg/postgres -> psql -c
 
 set -uo pipefail
 
-HOSTS_FILE="$HOME/.config/mysql/hosts"
+source "$HOME/.local/lib/db-hosts.sh" || exit 1
 
 err() { printf '%s\n' "$*" >&2; }
 
@@ -26,12 +28,12 @@ usage() {
 }
 
 list_names() {
-    grep -vE '^[[:space:]]*(#|$)' "$HOSTS_FILE" | cut -d: -f1
+    db_hosts_entries | cut -d: -f1
 }
 
 lower() { printf '%s' "$1" | tr '[:upper:]' '[:lower:]'; }
 
-[[ -f "$HOSTS_FILE" ]] || { err "hosts 파일 없음: $HOSTS_FILE"; exit 1; }
+[[ -f "$DB_HOSTS_FILE" ]] || { err "hosts 파일 없음: $DB_HOSTS_FILE"; exit 1; }
 
 case "${1:-}" in
     ""|-h|--help) usage ;;
@@ -47,7 +49,6 @@ qlower=$(lower "$QUERY_NAME")
 selected=""
 matches=()
 while IFS= read -r line; do
-    [[ -z "$line" || "$line" == \#* ]] && continue
     name="${line%%:*}"
     nlower=$(lower "$name")
     if [[ "$nlower" == "$qlower" ]]; then
@@ -56,11 +57,17 @@ while IFS= read -r line; do
     if [[ "$nlower" == *"$qlower"* ]]; then
         matches+=("$line")
     fi
-done < "$HOSTS_FILE"
+done < <(db_hosts_entries)
 
 if [[ -z "$selected" ]]; then
     case "${#matches[@]}" in
-        1) selected="${matches[0]}" ;;
+        1) selected="${matches[0]}"
+           # PROD는 부분 매칭으로 고르지 않는다 (예: 'datamart' -> "DataMart PROD" 방지)
+           if db_is_prod "${selected%%:*}"; then
+               err "PROD 서버는 전체 표시명으로만 지정할 수 있습니다: '$QUERY_NAME'"
+               err "  dbq \"${selected%%:*}\" \"<SQL>\""
+               exit 1
+           fi ;;
         0) err "매칭되는 서버 없음: '$QUERY_NAME'"; err "사용 가능:"; list_names >&2; exit 1 ;;
         *) err "여러 서버가 매칭됨. 더 구체적으로 지정하세요:"
            printf '  %s\n' "${matches[@]%%:*}" >&2; exit 1 ;;
@@ -71,7 +78,7 @@ IFS=':' read -r display host port user dbtype dbname <<< "$selected"
 dbtype="${dbtype:-mysql}"
 
 # Keychain 비밀번호 (db-connect.sh 와 동일 서비스)
-pw=$(security find-generic-password -s "mysql-db-connect" -a "$user" -w 2>/dev/null || true)
+pw=$(db_password "$user" || true)
 if [[ -z "$pw" ]]; then
     err "Keychain에 비밀번호 없음 (account=$user)."
     err "저장: security add-generic-password -s \"mysql-db-connect\" -a \"$user\" -w"

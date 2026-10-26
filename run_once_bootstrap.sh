@@ -19,6 +19,8 @@ fi
 # --with 로 얹는 것들:
 #   mycli[all]              \llm / \ai 와 dataframe 변환. 빼면 조용히 사라진다.
 #   psycopg, psycopg-binary justfile 의 redshift-* 레시피가 이 인터프리터를 쓴다.
+#                           3.3.5 미만은 Redshift 의 client_encoding 'UNICODE' 를 못 읽어
+#                           첫 쿼리에서 실패한다 (pgcli pyproject 도 >=3.3.5).
 #   catppuccin[pygments]    myclirc/pgcli config 의 syntax_style = catppuccin-mocha
 #                           가 실제로 동작하려면 필요하다. 없으면 pygments 가 이름을
 #                           못 찾고 경고 없이 native 로 폴백해서, 테마가 반쯤만
@@ -60,7 +62,7 @@ if command -v uv &>/dev/null; then
   }
 
   install_editable_tool pgcli https://github.com/ggiho/pgcli.git feature/atuin-history \
-    --with "psycopg<3.3" --with "psycopg-binary<3.3" --with "catppuccin[pygments]"
+    --with "psycopg>=3.3.5" --with "psycopg-binary>=3.3.5" --with "catppuccin[pygments]"
   install_editable_tool mycli https://github.com/ggiho/mycli.git feature/table-aliases-and-paste-hygiene \
     --with "mycli[all]" --with "catppuccin[pygments]"
 fi
