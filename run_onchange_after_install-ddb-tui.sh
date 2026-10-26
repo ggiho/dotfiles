@@ -11,7 +11,7 @@
 # 실패해도 apply 는 계속 간다. 수동 재실행: bash "$(chezmoi source-path)/run_onchange_after_install-ddb-tui.sh"
 set -euo pipefail
 
-DDB_TUI_VERSION=v0.3.1
+DDB_TUI_VERSION=v0.3.2
 BIN="$HOME/.local/bin"
 
 if [ -x "${CARGO_HOME:-$HOME/.cargo}/bin/ddb-tui" ]; then
