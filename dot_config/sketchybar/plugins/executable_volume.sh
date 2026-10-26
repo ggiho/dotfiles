@@ -38,27 +38,31 @@ current_output_icon() {
   esac
 }
 
+TOKEN_FILE="/tmp/sketchybar-volume.$(id -u)"
+
 apply_volume() {
   local volume="${1:-0}"
   local icon
-  local initial_width
-  local final_percentage
+  local token
 
   icon="$(current_output_icon "$volume")"
 
   sketchybar --set volume_icon icon="$icon" label="${volume}%"
   sketchybar --set "$NAME" slider.percentage="$volume"
 
-  initial_width="$(sketchybar --query "$NAME" | jq -r '.slider.width')"
-  if [ "$initial_width" = "0" ]; then
+  # Open it unless it is fully open. A query that fails counts as "not open", so the slider opens anyway.
+  if [ "$(sketchybar --query "$NAME" 2>/dev/null | jq -r '.slider.width' 2>/dev/null)" != "100" ]; then
     sketchybar --animate tanh 30 --set "$NAME" slider.width=100
   fi
 
+  # Close it 2 seconds after the LAST change. Which change is the last is decided by a token in a file, not by
+  # asking the bar: a query that failed while the bar was busy used to leave the slider open for good.
+  token="$$.$RANDOM"
+  printf '%s' "$token" > "$TOKEN_FILE"
   (
     sleep 2
-    final_percentage="$(sketchybar --query "$NAME" | jq -r '.slider.percentage')"
-    if [ "$final_percentage" = "$volume" ]; then
-      sketchybar --animate tanh 30 --set "$NAME" slider.width=0
+    if [ "$(cat "$TOKEN_FILE" 2>/dev/null)" = "$token" ]; then
+      sketchybar --animate tanh 30 --set "$NAME" slider.width=0 || { sleep 1; sketchybar --animate tanh 30 --set "$NAME" slider.width=0; }
     fi
   ) &
 }
