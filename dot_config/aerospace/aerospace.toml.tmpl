@@ -26,13 +26,13 @@ after-startup-command = ['exec-and-forget $HOME/.config/aerospace/sync-mode.sh']
 on-focused-monitor-changed = ['move-mouse monitor-lazy-center']
 {{- end }}
 
-# Keep workspaces 1-4 alive even when empty so they match the SketchyBar items
-persistent-workspaces = ['1', '2', '3', '4']
+# Keep workspaces 7, 8, 9 and 0 alive even when empty so they match the SketchyBar items
+persistent-workspaces = ['7', '8', '9', '0']
 
 enable-normalization-flatten-containers = true
 enable-normalization-opposite-orientation-for-nested-containers = true
 
-# Workspace 3 (the small MacBook screen) is an accordion: one window big, the others peek out
+# Workspace 9 (the small MacBook screen) is an accordion: one window big, the others peek out
 # at the edge, so apps with large minimum sizes never overlap.
 accordion-padding = 30
 default-root-container-layout = 'tiles'
@@ -41,21 +41,21 @@ default-root-container-orientation = 'auto'
 [key-mapping]
 preset = 'qwerty'
 {{ if $work }}
-# Work PC: 1 (browser) on the left external, 2 (terminal) on the right external,
-# 3 (work tools) and 4 (messengers) on the MacBook screen. Numbers are monitor
+# Work PC: 7 (browser) on the left external, 8 (terminal) on the right external,
+# 9 (work tools) and 0 (messengers) on the MacBook screen. Numbers are monitor
 # sequence numbers from left to right; each falls back when a monitor is missing.
 [workspace-to-monitor-force-assignment]
-'1' = [1, 'main']
-'2' = [3, 'secondary', 'main']
-'3' = ['built-in', 'main']
-'4' = ['built-in', 'main']
+'7' = [1, 'main']
+'8' = [3, 'secondary', 'main']
+'9' = ['built-in', 'main']
+'0' = ['built-in', 'main']
 {{- else }}
-# Workspace 4 (messengers) goes to the MacBook screen when open, else a secondary, else main
+# Workspace 0 (messengers) goes to the MacBook screen when open, else a secondary, else main
 [workspace-to-monitor-force-assignment]
-'1' = 'main'
-'2' = 'main'
-'3' = 'main'
-'4' = ['built-in', 'secondary', 'main']
+'7' = 'main'
+'8' = 'main'
+'9' = 'main'
+'0' = ['built-in', 'secondary', 'main']
 {{- end }}
 
 [gaps]
@@ -97,17 +97,17 @@ alt-cmd-comma = 'focus-monitor --wrap-around prev'
 alt-cmd-period = 'focus-monitor --wrap-around next'
 
 # Workspaces
-alt-u = 'workspace 1'
-alt-i = 'workspace 2'
-alt-o = 'workspace 3'
-alt-p = 'workspace 4'
+alt-u = 'workspace 7'
+alt-i = 'workspace 8'
+alt-o = 'workspace 9'
+alt-p = 'workspace 0'
 # Back to the previous workspace / the previous window. Also in 'term'.
 alt-tab = 'workspace-back-and-forth'
 alt-space = 'focus-back-and-forth'
-alt-cmd-u = 'move-node-to-workspace --focus-follows-window 1'
-alt-cmd-i = 'move-node-to-workspace --focus-follows-window 2'
-alt-cmd-o = 'move-node-to-workspace --focus-follows-window 3'
-alt-cmd-p = 'move-node-to-workspace --focus-follows-window 4'
+alt-cmd-u = 'move-node-to-workspace --focus-follows-window 7'
+alt-cmd-i = 'move-node-to-workspace --focus-follows-window 8'
+alt-cmd-o = 'move-node-to-workspace --focus-follows-window 9'
+alt-cmd-p = 'move-node-to-workspace --focus-follows-window 0'
 
 # Layout / fullscreen
 alt-cmd-backslash = 'layout tiles horizontal vertical'
@@ -136,14 +136,14 @@ alt-shift-j = 'exec-and-forget $HOME/.config/aerospace/resize j'
 alt-shift-k = 'exec-and-forget $HOME/.config/aerospace/resize k'
 alt-cmd-comma = 'focus-monitor --wrap-around prev'
 alt-cmd-period = 'focus-monitor --wrap-around next'
-alt-u = 'workspace 1'
-alt-i = 'workspace 2'
-alt-o = 'workspace 3'
-alt-p = 'workspace 4'
-alt-cmd-u = 'move-node-to-workspace --focus-follows-window 1'
-alt-cmd-i = 'move-node-to-workspace --focus-follows-window 2'
-alt-cmd-o = 'move-node-to-workspace --focus-follows-window 3'
-alt-cmd-p = 'move-node-to-workspace --focus-follows-window 4'
+alt-u = 'workspace 7'
+alt-i = 'workspace 8'
+alt-o = 'workspace 9'
+alt-p = 'workspace 0'
+alt-cmd-u = 'move-node-to-workspace --focus-follows-window 7'
+alt-cmd-i = 'move-node-to-workspace --focus-follows-window 8'
+alt-cmd-o = 'move-node-to-workspace --focus-follows-window 9'
+alt-cmd-p = 'move-node-to-workspace --focus-follows-window 0'
 alt-cmd-backslash = 'layout tiles horizontal vertical'
 alt-cmd-m = 'fullscreen'
 alt-cmd-t = 'layout floating tiling'     # toggle the focused window between floating and tiled
@@ -167,10 +167,10 @@ minus = 'resize smart -50'
 equal = 'resize smart +50'
 
 # Send focused window to workspace, then follow it there
-1 = ['move-node-to-workspace 1', 'workspace 1', 'mode main']
-2 = ['move-node-to-workspace 2', 'workspace 2', 'mode main']
-3 = ['move-node-to-workspace 3', 'workspace 3', 'mode main']
-4 = ['move-node-to-workspace 4', 'workspace 4', 'mode main']
+7 = ['move-node-to-workspace 7', 'workspace 7', 'mode main']
+8 = ['move-node-to-workspace 8', 'workspace 8', 'mode main']
+9 = ['move-node-to-workspace 9', 'workspace 9', 'mode main']
+0 = ['move-node-to-workspace 0', 'workspace 0', 'mode main']
 
 # Misc helpers
 f = ['layout floating tiling', 'mode main']
@@ -180,39 +180,39 @@ m = ['move-workspace-to-monitor --wrap-around next', 'mode main']
 # Default is floating: only the apps listed below are tiled.
 # AeroSpace runs the first matching rule and stops, so keep specific apps above the catch-all.
 
-# 1: browser
+# 7: browser
 [[on-window-detected]]
 if.app-id = 'com.google.Chrome'
-run = 'move-node-to-workspace 1'
+run = 'move-node-to-workspace 7'
 
-# 2: terminal
+# 8: terminal
 [[on-window-detected]]
 if.app-id = 'com.github.wez.wezterm'
-run = 'move-node-to-workspace 2'
+run = 'move-node-to-workspace 8'
 
-# 3: work tools
+# 9: work tools
 [[on-window-detected]]
 if.app-id = 'com.jetbrains.datagrip'
-run = ['move-node-to-workspace 3', 'layout v_accordion']
+run = ['move-node-to-workspace 9', 'layout v_accordion']
 
 [[on-window-detected]]
 if.app-id = 'md.obsidian'
-run = ['move-node-to-workspace 3', 'layout v_accordion']
+run = ['move-node-to-workspace 9', 'layout v_accordion']
 
-# 4: messengers
+# 0: messengers
 [[on-window-detected]]
 if.app-id = 'com.tinyspeck.slackmacgap'
-run = 'move-node-to-workspace 4'
+run = 'move-node-to-workspace 0'
 
-# Tiled, always on 1 (next to the browser)
+# Tiled, always on 7 (next to the browser)
 [[on-window-detected]]
 if.app-id = 'com.microsoft.Outlook'
-run = ['layout tiling', 'move-node-to-workspace 1']
+run = ['layout tiling', 'move-node-to-workspace 7']
 
 # KakaoTalk stays a small floating window
 [[on-window-detected]]
 if.app-id = 'com.kakao.KakaoTalkMac'
-run = ['layout floating', 'move-node-to-workspace 4', 'exec-and-forget $HOME/.config/aerospace/keepbelow']
+run = ['layout floating', 'move-node-to-workspace 0', 'exec-and-forget $HOME/.config/aerospace/keepbelow']
 
 # Everything else floats
 [[on-window-detected]]
@@ -221,53 +221,53 @@ run = ['layout floating', 'exec-and-forget $HOME/.config/aerospace/keepbelow']
 {{- else }}
 # Other Macs keep tiling the apps they had before the work Mac's "float everything else" policy.
 # App -> workspace assignment (applies when a window opens)
-# 1: browsers
+# 7: browsers
 [[on-window-detected]]
 if.app-id = 'com.google.Chrome'
-run = 'move-node-to-workspace 1'
+run = 'move-node-to-workspace 7'
 
 [[on-window-detected]]
 if.app-id = 'com.apple.Safari'
-run = 'move-node-to-workspace 1'
+run = 'move-node-to-workspace 7'
 
 [[on-window-detected]]
 if.app-id = 'app.zen-browser.zen'
-run = 'move-node-to-workspace 1'
+run = 'move-node-to-workspace 7'
 
-# 2: terminals
+# 8: terminals
 [[on-window-detected]]
 if.app-id = 'com.github.wez.wezterm'
-run = 'move-node-to-workspace 2'
+run = 'move-node-to-workspace 8'
 
 [[on-window-detected]]
 if.app-id = 'dev.warp.Warp-Stable'
-run = 'move-node-to-workspace 2'
+run = 'move-node-to-workspace 8'
 
-# 3: work tools
+# 9: work tools
 [[on-window-detected]]
 if.app-id = 'com.jetbrains.datagrip'
-run = 'move-node-to-workspace 3'
+run = 'move-node-to-workspace 9'
 
 [[on-window-detected]]
 if.app-id = 'notion.id'
-run = 'move-node-to-workspace 3'
+run = 'move-node-to-workspace 9'
 
 [[on-window-detected]]
 if.app-id = 'md.obsidian'
-run = 'move-node-to-workspace 3'
+run = 'move-node-to-workspace 9'
 
-# 4: messengers (KakaoTalk stays a small floating window)
+# 0: messengers (KakaoTalk stays a small floating window)
 [[on-window-detected]]
 if.app-id = 'com.kakao.KakaoTalkMac'
-run = ['layout floating', 'move-node-to-workspace 4', 'exec-and-forget $HOME/.config/aerospace/keepbelow']
+run = ['layout floating', 'move-node-to-workspace 0', 'exec-and-forget $HOME/.config/aerospace/keepbelow']
 
 [[on-window-detected]]
 if.app-id = 'com.tinyspeck.slackmacgap'
-run = 'move-node-to-workspace 4'
+run = 'move-node-to-workspace 0'
 
 [[on-window-detected]]
 if.app-id = 'com.hnc.Discord'
-run = 'move-node-to-workspace 4'
+run = 'move-node-to-workspace 0'
 
 # Always floating
 [[on-window-detected]]
