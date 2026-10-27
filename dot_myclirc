@@ -41,8 +41,9 @@ destructive_keywords = DROP SHUTDOWN DELETE TRUNCATE ALTER UPDATE
 # interactive query history location.
 history_file = ~/.mycli-history
 
-# Store query history in atuin, tagged with atuin_author so it stays separable
-# from shell history (atuin search --author mycli). Entries already in
+# Store query history in atuin, tagged with atuin_author (atuin search --author
+# mycli). The entries are ordinary atuin history: the shell's atuin search shows
+# them too, and they sync if atuin sync is set up. Entries already in
 # history_file stay readable; they are not imported.
 atuin_history = True
 
@@ -51,9 +52,9 @@ atuin_author = mycli
 
 # Bind Up to atuin's own search UI, the way `atuin init zsh` does. Up only
 # takes over for a single-line buffer, so it still moves the cursor in
-# multi-line SQL and through the completion menu. Ctrl-R stays on fzf, which
-# also searches the older history_file; set control_r = atuin in the [keys]
-# section to move Ctrl-R over too.
+# multi-line SQL and through the completion menu. Ctrl-R is not affected: it
+# follows control_r in the [keys] section (auto, fzf or reverse_isearch) and
+# searches the history mycli loaded, atuin entries included.
 atuin_keys = True
 
 # log_file location.

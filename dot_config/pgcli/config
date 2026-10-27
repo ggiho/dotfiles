@@ -93,9 +93,10 @@ case_column_headers = True
 # %USERPROFILE% is typically C:\Users\{username}
 history_file = default
 
-# Store query history in atuin, tagged with atuin_author so it stays separable
-# from shell history (atuin search --author pgcli). Handled by the patch module
-# in ~/.config/pgcli/ext, loaded via the pgcli shell alias.
+# Store query history in atuin, tagged with atuin_author (atuin search --author
+# pgcli). Built into the ggiho/pgcli fork. The entries are ordinary atuin
+# history: the shell's atuin search shows them too, and they sync if atuin sync
+# is set up.
 atuin_history = True
 atuin_author = pgcli
 
