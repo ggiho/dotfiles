@@ -11,9 +11,12 @@ per change, so everything changes at the same moment.
   - highlight: the focused window's icon
   - label:     the front app's name (set here, so it can no longer run ahead of the icons)
   - guard:     a tiled window whose frame keeps flipping (app minimum size vs tile) is floated
+  - overflow:  tiled windows that stick out of their monitor (app minimum sizes need more room than the monitor has)
+               turn the workspace into an accordion, whose windows overlap instead of spilling onto the next monitor
 
 Set WSBAR_DRYRUN=1 to log the sketchybar calls instead of sending them.
 """
+import ctypes
 import fcntl
 import itertools
 import json
@@ -33,13 +36,17 @@ AEROSPACE = "/opt/homebrew/bin/aerospace"
 SKETCHYBAR = "/opt/homebrew/bin/sketchybar"
 FRAMES = CONFIG_DIR + "/helper/winframes"
 APPWATCH = CONFIG_DIR + "/helper/appwatch"
-WORKSPACES = ["7", "8", "9", "0"]
+WORKSPACES = ["6", "7", "8", "9", "0"]
 BASE_SLOTS = 8                  # slots the rc creates; more are added on demand
 POLL_SECONDS = 3.0
 INPUT_QUIET_SECONDS = 5.0         # after one of the user's key bindings, moved windows are not a shake
 SWITCH_QUIET_SECONDS = 4.0        # after a workspace switch the periodic check only re-baselines
 STRUCT_POLL_SECONDS = 60.0      # how often AeroSpace is asked for the full window list when nothing seems to change
 HEAL_SECONDS = 20.0
+OVERFLOW_TOLERANCE = 4         # pixels a tiled window may stick out of its monitor (the outer gap is 8)
+OVERFLOW_SETTLE_SECONDS = 4.0   # how long a window must stick out before the layout is changed (apps settle slowly)
+OVERFLOW_COOLDOWN_SECONDS = 120.0
+OVERFLOW_ACTION = "log"           # "log": only record it; "accordion": also turn the workspace into an accordion
 RECHECK_SECONDS = 1.0           # a second look when AeroSpace still lists a window the system no longer has
 COALESCE_SECONDS = 0.008        # wait this long for sibling events before drawing
 SETTLE_SECONDS = 0.35           # hold window after a switch (see on_focus_event)
@@ -324,6 +331,39 @@ def poll_frames():
 _TICKETS = itertools.count(1)
 
 
+class _CGPoint(ctypes.Structure):
+    _fields_ = [("x", ctypes.c_double), ("y", ctypes.c_double)]
+
+
+class _CGSize(ctypes.Structure):
+    _fields_ = [("w", ctypes.c_double), ("h", ctypes.c_double)]
+
+
+class _CGRect(ctypes.Structure):
+    _fields_ = [("origin", _CGPoint), ("size", _CGSize)]
+
+
+def display_bounds():
+    """The displays as (x0, y0, x1, y1), left to right then top to bottom: the order AeroSpace numbers its monitors
+    in (1-based, so monitor n is item n-1)."""
+    try:
+        cg = ctypes.CDLL("/System/Library/Frameworks/CoreGraphics.framework/CoreGraphics")
+        cg.CGDisplayBounds.restype = _CGRect
+        cg.CGDisplayBounds.argtypes = [ctypes.c_uint32]
+        cg.CGGetActiveDisplayList.argtypes = [ctypes.c_uint32, ctypes.POINTER(ctypes.c_uint32), ctypes.POINTER(ctypes.c_uint32)]
+        ids = (ctypes.c_uint32 * 16)()
+        n = ctypes.c_uint32()
+        cg.CGGetActiveDisplayList(16, ids, ctypes.byref(n))
+        rects = []
+        for i in range(n.value):
+            r = cg.CGDisplayBounds(ids[i])
+            rects.append((r.origin.x, r.origin.y, r.origin.x + r.size.w, r.origin.y + r.size.h))
+        return sorted(rects)
+    except Exception as e:
+        log("display bounds failed: %s" % e)
+        return []
+
+
 def take_snapshot():
     """All the slow lookups, in parallel. Returns a dict, or None if AeroSpace did not answer.
     The dict carries a ticket, numbered when the look started (see Daemon.handle, "snapshot")."""
@@ -368,6 +408,8 @@ class Daemon:
         self.suspects = {}       # window id -> time first flagged
         self.cooldown = {}       # window id -> time last floated
         self.last_heal = time.time()
+        self.overflow_since = {}      # ws -> when its tiled windows were first seen sticking out of the monitor
+        self.overflow_done = {}       # ws -> when the layout was last changed because of that
         self.recheck_pending = False
         self.verify_after = False     # a window or app went: the next full look is checked against the system's list
         self.applied_ticket = 0       # the newest look at the system that has been shown
@@ -487,6 +529,59 @@ class Daemon:
         if snap:
             self.q.put(("snapshot", snap))
 
+    def check_overflow(self, frames, now):
+        """A tiled window cannot shrink below its app's minimum size. When the windows of a workspace need more room
+        than its monitor has, the last one sticks out and ends up on the neighbouring monitor. The layout can not
+        fix that, but an accordion can: its windows overlap instead of sitting side by side. So when a workspace on
+        screen has tiled windows sticking out of their monitor for a few seconds, its layout becomes an accordion
+        (along the direction they stick out). Going back is up to the user (alt-cmd-backslash)."""
+        if now - self.last_switch < SWITCH_QUIET_SECONDS or now - self.last_input < INPUT_QUIET_SECONDS:
+            self.overflow_since.clear()           # windows are being moved around on purpose
+            return
+        s = self.state
+        rects = None
+        rows = {r[0]: r for r in self.last_rows} if self.last_rows else {}
+        for ws in WORKSPACES:
+            mon = s.ws_monitor.get(ws)
+            ids = [w[0] for w in s.windows.get(ws, [])]
+            if mon is None or s.visible_by_monitor.get(mon) != ws or len(ids) < 2:
+                self.overflow_since.pop(ws, None)
+                continue
+            if any("accordion" in rows[i][2] for i in ids if i in rows):
+                self.overflow_since.pop(ws, None)      # already an accordion: nothing to switch to
+                continue
+            if rects is None:
+                rects = display_bounds()
+            if not 1 <= mon <= len(rects):
+                continue
+            x0, y0, x1, y1 = rects[mon - 1]
+            horizontal = vertical = False
+            for i in ids:
+                f = frames.get(i)
+                if not f:
+                    continue
+                fx, fy, fw, fh = f[0], f[1], int(f[2]), int(f[3])
+                if fx < x0 - OVERFLOW_TOLERANCE or fx + fw > x1 + OVERFLOW_TOLERANCE:
+                    horizontal = True
+                if fy < y0 - OVERFLOW_TOLERANCE or fy + fh > y1 + OVERFLOW_TOLERANCE:
+                    vertical = True
+            if not (horizontal or vertical):
+                self.overflow_since.pop(ws, None)
+                continue
+            since = self.overflow_since.setdefault(ws, now)
+            if now - since < OVERFLOW_SETTLE_SECONDS or now - self.overflow_done.get(ws, 0) < OVERFLOW_COOLDOWN_SECONDS:
+                continue
+            layout = "h_accordion" if horizontal else "v_accordion"
+            self.overflow_done[ws] = now
+            self.overflow_since.pop(ws, None)
+            log("OVERFLOW workspace %s: tiled windows stick out of monitor %d (%s)" % (ws, mon, OVERFLOW_ACTION))
+            with open(SHAKE_LOG, "a") as fh:
+                fh.write("%s workspace %s: tiled windows stick out of their monitor: %s\n"
+                         % (time.strftime("%F %T"), ws, ", ".join("%s %s..%s" % (frames[i][0], frames[i][0], frames[i][0] + int(frames[i][2])) for i in ids if i in frames)))
+            if OVERFLOW_ACTION == "accordion" and not DRYRUN:
+                run([AEROSPACE, "layout", "--workspace", ws, "--root", layout])
+                self.q.put(("winchange", 0))
+
     def poll_worker(self):
         """Every few seconds: look at the system's window list (cheap, no AeroSpace). Only when the set
         of windows changed (or every STRUCT_POLL_SECONDS as a safety net) ask AeroSpace for everything."""
@@ -502,6 +597,7 @@ class Daemon:
                     if snap:
                         self.q.put(("snapshot", snap))
                 return
+            self.check_overflow(frames, now)
             ids = frozenset(frames)
             if now - self.last_switch < SWITCH_QUIET_SECONDS and self.last_ids is not None and ids == self.last_ids:
                 # a workspace switch moves every window on and off the screen: that is not shaking, so

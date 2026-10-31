@@ -52,7 +52,7 @@ defaults=(
 sketchybar --default "${defaults[@]}"
 
 
-workspaces=("7" "8" "9" "0")
+workspaces=("6" "7" "8" "9" "0")
 for sid in "${workspaces[@]}"; do
   space=(
     icon="$sid"
@@ -126,7 +126,7 @@ sketchybar --add item apple.logo left \
            --set apple.activity "${apple_row[@]}" "${apple_activity[@]}" \
            --add item apple.lock popup.apple.logo \
            --set apple.lock "${apple_row[@]}" "${apple_lock[@]}" \
-           --move apple.logo before space.7
+           --move apple.logo before space.6
 
 front_app=(
   icon=

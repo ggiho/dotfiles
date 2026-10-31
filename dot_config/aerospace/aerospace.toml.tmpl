@@ -26,8 +26,8 @@ after-startup-command = ['exec-and-forget $HOME/.config/aerospace/sync-mode.sh']
 on-focused-monitor-changed = ['move-mouse monitor-lazy-center']
 {{- end }}
 
-# Keep workspaces 7, 8, 9 and 0 alive even when empty so they match the SketchyBar items
-persistent-workspaces = ['7', '8', '9', '0']
+# Keep workspaces 6, 7, 8, 9 and 0 alive even when empty so they match the SketchyBar items
+persistent-workspaces = ['6', '7', '8', '9', '0']
 
 enable-normalization-flatten-containers = true
 enable-normalization-opposite-orientation-for-nested-containers = true
@@ -41,10 +41,11 @@ default-root-container-orientation = 'auto'
 [key-mapping]
 preset = 'qwerty'
 {{ if $work }}
-# Work PC: 7 (browser) on the left external, 8 (terminal) on the right external,
+# Work PC: 6 (spare room for what does not fit on 7) and 7 (browser) on the left external, 8 (terminal) on the right external,
 # 9 (work tools) and 0 (messengers) on the MacBook screen. Numbers are monitor
 # sequence numbers from left to right; each falls back when a monitor is missing.
 [workspace-to-monitor-force-assignment]
+'6' = [1, 'main']
 '7' = [1, 'main']
 '8' = [3, 'secondary', 'main']
 '9' = ['built-in', 'main']
@@ -52,6 +53,7 @@ preset = 'qwerty'
 {{- else }}
 # Workspace 0 (messengers) goes to the MacBook screen when open, else a secondary, else main
 [workspace-to-monitor-force-assignment]
+'6' = 'main'
 '7' = 'main'
 '8' = 'main'
 '9' = 'main'
@@ -77,10 +79,12 @@ outer.right = 8
 [mode.main.binding]
 # Direction: alt = focus, alt-cmd = move window (replaces Raycast alt-cmd-h/l split)
 # A fullscreen window would hide the move, so moving leaves fullscreen first (like the focus keys do).
-alt-h = 'focus left'
-alt-j = 'focus down'
-alt-k = 'focus up'
-alt-l = 'focus right'
+# Directional focus ignores floating windows: they have no place in the layout (and AeroSpace 0.21.3 can crash
+# when the focus keys are pressed quickly in a workspace with floating windows, issue #1311). Reach them from the bar.
+alt-h = 'focus --ignore-floating left'
+alt-j = 'focus --ignore-floating down'
+alt-k = 'focus --ignore-floating up'
+alt-l = 'focus --ignore-floating right'
 alt-cmd-h = ['fullscreen off', 'move left']
 alt-cmd-j = ['fullscreen off', 'move down']
 alt-cmd-k = ['fullscreen off', 'move up']
@@ -97,6 +101,7 @@ alt-cmd-comma = 'focus-monitor --wrap-around prev'
 alt-cmd-period = 'focus-monitor --wrap-around next'
 
 # Workspaces
+alt-y = 'workspace 6'
 alt-u = 'workspace 7'
 alt-i = 'workspace 8'
 alt-o = 'workspace 9'
@@ -104,6 +109,16 @@ alt-p = 'workspace 0'
 # Back to the previous workspace / the previous window. Also in 'term'.
 alt-tab = 'workspace-back-and-forth'
 alt-space = 'focus-back-and-forth'
+# Jump to an app: opens it, or brings it to the front; AeroSpace follows to the workspace its window is on.
+alt-t = 'exec-and-forget open -a WezTerm'
+alt-b = 'exec-and-forget open -a "Google Chrome"'
+alt-m = 'exec-and-forget open -a "Microsoft Outlook"'
+{{- if $work }}
+alt-c = 'exec-and-forget open -a Slack'
+{{- else }}
+alt-c = 'exec-and-forget open -a KakaoTalk'
+{{- end }}
+alt-cmd-y = 'move-node-to-workspace --focus-follows-window 6'
 alt-cmd-u = 'move-node-to-workspace --focus-follows-window 7'
 alt-cmd-i = 'move-node-to-workspace --focus-follows-window 8'
 alt-cmd-o = 'move-node-to-workspace --focus-follows-window 9'
@@ -126,6 +141,14 @@ alt-cmd-semicolon = 'mode service'
 [mode.term.binding]
 alt-tab = 'workspace-back-and-forth'
 alt-space = 'focus-back-and-forth'
+alt-t = 'exec-and-forget open -a WezTerm'
+alt-b = 'exec-and-forget open -a "Google Chrome"'
+alt-m = 'exec-and-forget open -a "Microsoft Outlook"'
+{{- if $work }}
+alt-c = 'exec-and-forget open -a Slack'
+{{- else }}
+alt-c = 'exec-and-forget open -a KakaoTalk'
+{{- end }}
 alt-cmd-h = ['fullscreen off', 'move left']
 alt-cmd-j = ['fullscreen off', 'move down']
 alt-cmd-k = ['fullscreen off', 'move up']
@@ -136,10 +159,12 @@ alt-shift-j = 'exec-and-forget $HOME/.config/aerospace/resize j'
 alt-shift-k = 'exec-and-forget $HOME/.config/aerospace/resize k'
 alt-cmd-comma = 'focus-monitor --wrap-around prev'
 alt-cmd-period = 'focus-monitor --wrap-around next'
+alt-y = 'workspace 6'
 alt-u = 'workspace 7'
 alt-i = 'workspace 8'
 alt-o = 'workspace 9'
 alt-p = 'workspace 0'
+alt-cmd-y = 'move-node-to-workspace --focus-follows-window 6'
 alt-cmd-u = 'move-node-to-workspace --focus-follows-window 7'
 alt-cmd-i = 'move-node-to-workspace --focus-follows-window 8'
 alt-cmd-o = 'move-node-to-workspace --focus-follows-window 9'
@@ -167,6 +192,7 @@ minus = 'resize smart -50'
 equal = 'resize smart +50'
 
 # Send focused window to workspace, then follow it there
+6 = ['move-node-to-workspace 6', 'workspace 6', 'mode main']
 7 = ['move-node-to-workspace 7', 'workspace 7', 'mode main']
 8 = ['move-node-to-workspace 8', 'workspace 8', 'mode main']
 9 = ['move-node-to-workspace 9', 'workspace 9', 'mode main']
