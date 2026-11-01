@@ -7,6 +7,7 @@
 #   right click  (cpu, mem) open Activity Monitor
 
 kind="$1"
+fn="${kind%%.*}"          # function suffix: apple.logo -> apple
 case "$kind" in
   cpu) others="mem apple.logo" ;;
   mem) others="cpu apple.logo" ;;
@@ -130,7 +131,7 @@ build_mem() {
   fill_apps mem.popup mem
 }
 
-"start_$kind"
+"start_$fn"
 
 # SketchyBar draws a popup on the display that has the macOS focus, not on the one that was clicked
 # (SketchyBar issue #742), so bring the focus to the monitor under the pointer while the measuring runs.
@@ -145,7 +146,7 @@ fi
 wait
 
 args=()
-"build_$kind"
+"build_$fn"
 
 # a later click or a mouse exit took over while this was preparing: do not show a stale popup
 if [ "$(cat "$SEQ" 2>/dev/null)" != "$seq" ]; then

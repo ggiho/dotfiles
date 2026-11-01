@@ -178,8 +178,8 @@ alt-cmd-shift-equal = 'balance-sizes'
 alt-cmd-semicolon = 'mode service'
 
 [mode.service.binding]
-esc = 'mode main'
-enter = 'mode main'
+esc = ['mode main', 'exec-and-forget $HOME/.config/aerospace/sync-mode.sh']
+enter = ['mode main', 'exec-and-forget $HOME/.config/aerospace/sync-mode.sh']
 
 # Move windows
 h = 'move left'
@@ -192,16 +192,16 @@ minus = 'resize smart -50'
 equal = 'resize smart +50'
 
 # Send focused window to workspace, then follow it there
-6 = ['move-node-to-workspace 6', 'workspace 6', 'mode main']
-7 = ['move-node-to-workspace 7', 'workspace 7', 'mode main']
-8 = ['move-node-to-workspace 8', 'workspace 8', 'mode main']
-9 = ['move-node-to-workspace 9', 'workspace 9', 'mode main']
-0 = ['move-node-to-workspace 0', 'workspace 0', 'mode main']
+6 = ['move-node-to-workspace 6', 'workspace 6', 'mode main', 'exec-and-forget $HOME/.config/aerospace/sync-mode.sh']
+7 = ['move-node-to-workspace 7', 'workspace 7', 'mode main', 'exec-and-forget $HOME/.config/aerospace/sync-mode.sh']
+8 = ['move-node-to-workspace 8', 'workspace 8', 'mode main', 'exec-and-forget $HOME/.config/aerospace/sync-mode.sh']
+9 = ['move-node-to-workspace 9', 'workspace 9', 'mode main', 'exec-and-forget $HOME/.config/aerospace/sync-mode.sh']
+0 = ['move-node-to-workspace 0', 'workspace 0', 'mode main', 'exec-and-forget $HOME/.config/aerospace/sync-mode.sh']
 
 # Misc helpers
-f = ['layout floating tiling', 'mode main']
-r = ['flatten-workspace-tree', 'mode main']
-m = ['move-workspace-to-monitor --wrap-around next', 'mode main']
+f = ['layout floating tiling', 'mode main', 'exec-and-forget $HOME/.config/aerospace/sync-mode.sh']
+r = ['flatten-workspace-tree', 'mode main', 'exec-and-forget $HOME/.config/aerospace/sync-mode.sh']
+m = ['move-workspace-to-monitor --wrap-around next', 'mode main', 'exec-and-forget $HOME/.config/aerospace/sync-mode.sh']
 {{ if $work }}
 # Default is floating: only the apps listed below are tiled.
 # AeroSpace runs the first matching rule and stops, so keep specific apps above the catch-all.

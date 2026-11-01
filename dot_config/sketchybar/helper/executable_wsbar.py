@@ -217,11 +217,16 @@ class Bar:
 
         # front app name, from the same state so it changes together with the icons
         name = s.app_of.get(s.focused_id)
+        if s.focused_ws and not s.icons.get(s.focused_ws):
+            name = ""                  # a workspace without windows has no front app: do not keep the previous one
         if DEBUG:
             log("DBG render ws=%s focused_id=%s name=%s shown_label=%s" % (s.focused_ws, s.focused_id, name, self.label))
         if name and name != self.label:
             args += ["--set", "front_app", "label=" + name, "label.drawing=on"]
             self.label = name
+        elif name == "" and self.label:
+            args += ["--set", "front_app", "label=", "label.drawing=off"]
+            self.label = ""
 
         self.send(args)
 
