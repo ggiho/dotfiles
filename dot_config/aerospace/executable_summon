@@ -1,0 +1,14 @@
+#!/bin/bash
+# summon <bundle-id> <app name>
+# Brings the windows of an app to the workspace you are in, then opens or activates the app. For small floating
+# windows (a messenger) that are not worth switching workspaces for.
+export PATH=/opt/homebrew/bin:$PATH
+bundle="$1"; app="$2"
+ws="$(aerospace list-workspaces --focused 2>/dev/null)"
+if [ -n "$ws" ]; then
+  aerospace list-windows --monitor all --app-bundle-id "$bundle" --format '%{window-id}|%{workspace}' 2>/dev/null |
+    while IFS='|' read -r id wsid; do
+      [ "$wsid" != "$ws" ] && aerospace move-node-to-workspace --window-id "$id" "$ws" >/dev/null 2>&1
+    done
+fi
+exec open -a "$app"

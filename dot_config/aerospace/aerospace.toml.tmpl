@@ -116,7 +116,7 @@ alt-m = 'exec-and-forget open -a "Microsoft Outlook"'
 {{- if $work }}
 alt-c = 'exec-and-forget open -a Slack'
 {{- else }}
-alt-c = 'exec-and-forget open -a KakaoTalk'
+alt-c = 'exec-and-forget $HOME/.config/aerospace/summon com.kakao.KakaoTalkMac KakaoTalk'
 {{- end }}
 alt-cmd-y = 'move-node-to-workspace --focus-follows-window 6'
 alt-cmd-u = 'move-node-to-workspace --focus-follows-window 7'
@@ -147,7 +147,7 @@ alt-m = 'exec-and-forget open -a "Microsoft Outlook"'
 {{- if $work }}
 alt-c = 'exec-and-forget open -a Slack'
 {{- else }}
-alt-c = 'exec-and-forget open -a KakaoTalk'
+alt-c = 'exec-and-forget $HOME/.config/aerospace/summon com.kakao.KakaoTalkMac KakaoTalk'
 {{- end }}
 alt-cmd-h = ['fullscreen off', 'move left']
 alt-cmd-j = ['fullscreen off', 'move down']
@@ -235,10 +235,10 @@ run = 'move-node-to-workspace 0'
 if.app-id = 'com.microsoft.Outlook'
 run = ['layout tiling', 'move-node-to-workspace 7']
 
-# KakaoTalk stays a small floating window
+# KakaoTalk stays a small floating window, in whichever workspace you are in
 [[on-window-detected]]
 if.app-id = 'com.kakao.KakaoTalkMac'
-run = ['layout floating', 'move-node-to-workspace 0', 'exec-and-forget $HOME/.config/aerospace/keepbelow']
+run = ['layout floating', 'exec-and-forget $HOME/.config/aerospace/keepbelow']
 
 # Everything else floats
 [[on-window-detected]]
@@ -282,10 +282,10 @@ run = 'move-node-to-workspace 9'
 if.app-id = 'md.obsidian'
 run = 'move-node-to-workspace 9'
 
-# 0: messengers (KakaoTalk stays a small floating window)
+# 0: messengers (KakaoTalk is a small floating window that opens in whichever workspace you are in)
 [[on-window-detected]]
 if.app-id = 'com.kakao.KakaoTalkMac'
-run = ['layout floating', 'move-node-to-workspace 0', 'exec-and-forget $HOME/.config/aerospace/keepbelow']
+run = ['layout floating', 'exec-and-forget $HOME/.config/aerospace/keepbelow']
 
 [[on-window-detected]]
 if.app-id = 'com.tinyspeck.slackmacgap'
