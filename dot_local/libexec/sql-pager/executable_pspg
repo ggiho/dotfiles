@@ -1,0 +1,90 @@
+#!/usr/bin/env python3
+"""pspg for mycli and pgcli results, with the less wrapper next to it as a fallback.
+
+The arguments are passed on to pspg, so the pager setting holds its options.
+
+- A result that fits on the screen, in height and in width, is printed as is.
+  pspg's own --quit-if-one-screen looks at the height only, so a short but wide
+  result was printed wrapped instead of being shown.
+- Anything bigger opens in pspg.
+- If pspg fails, the same result is shown by the less wrapper instead, so it is
+  never lost. pspg 5.9.0 on macOS stops with "internal error" on some ordinary
+  tables (https://github.com/okbob/pspg/issues/273); 5.8.9 does not.
+"""
+
+import os
+import re
+import shutil
+import signal
+import subprocess
+import sys
+import unicodedata
+
+LESS_WRAPPER = os.path.join(os.path.dirname(os.path.abspath(__file__)), "less")
+ESCAPE = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
+
+
+def width(line):
+    """Display columns: escape sequences take none, tabs stop every 8 columns,
+    East Asian wide characters take 2."""
+    col = 0
+    for char in ESCAPE.sub("", line):
+        if char == "\t":
+            col += 8 - col % 8
+        else:
+            col += 2 if unicodedata.east_asian_width(char) in "WF" else 1
+    return col
+
+
+def find_pspg():
+    me = os.path.realpath(__file__)
+    for directory in os.environ.get("PATH", "").split(os.pathsep):
+        candidate = shutil.which("pspg", path=directory)
+        if candidate and os.path.realpath(candidate) != me:
+            return candidate
+    return None
+
+
+def run(command, data, **kwargs):
+    # Ctrl-C goes to the whole foreground group; the pager handles it.
+    previous = signal.signal(signal.SIGINT, signal.SIG_IGN)
+    try:
+        proc = subprocess.Popen(command, stdin=subprocess.PIPE, **kwargs)
+        _, err = proc.communicate(data)
+    finally:
+        signal.signal(signal.SIGINT, previous)
+    return proc.returncode, err
+
+
+def main():
+    data = sys.stdin.buffer.read()
+    try:
+        columns, rows = os.get_terminal_size(sys.stdout.fileno())
+    except OSError:
+        sys.stdout.buffer.write(data)
+        return 0
+
+    lines = data.decode("utf-8", "surrogateescape").split("\n")
+    if lines[-1] == "":
+        lines.pop()
+    if len(lines) < rows and all(width(line) <= columns for line in lines):
+        sys.stdout.buffer.write(data)
+        return 0
+
+    pspg = find_pspg()
+    if pspg:
+        status, err = run([pspg, *sys.argv[1:]], data, stderr=subprocess.PIPE)
+        if status == 0:
+            return 0
+        why = err.decode("utf-8", "replace").strip().splitlines()
+        reason = why[-1] if why else f"exit {status}"
+    else:
+        reason = "not installed"
+    sys.stderr.write(f"\x1b[2m(pspg: {reason}; shown with less)\x1b[0m\n")
+    sys.stderr.flush()
+    status, _ = run([LESS_WRAPPER], data)
+    return status
+
+
+if __name__ == "__main__":
+    sys.exit(main())

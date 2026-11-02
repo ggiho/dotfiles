@@ -121,11 +121,15 @@ search_path_filter = False
 # Default pager. See https://www.pgcli.com/pager for more information on settings.
 # By default 'PAGER' environment variable is used. If the pager is less, and the 'LESS'
 # environment variable is not set, then LESS='-SRXF' will be automatically set.
-# ~/.local/libexec/sql-pager/less wraps /usr/bin/less: alternate screen so
-# scrolling sideways does not push screenfuls into tmux's scrollback, painted
-# from the top so a short result does not jump, and the result left on screen
-# after quitting. See the script for why plain less options cannot do all three.
-pager = /Users/giho.seong/.local/libexec/sql-pager/less
+# ~/.local/libexec/sql-pager/pspg prints a result that fits on the screen as
+# is, opens anything bigger in pspg with these options, and falls back to the
+# less wrapper next to it if pspg fails (see the script). pspg shows a grid:
+# the first column frozen (-c 1), row and column cursors, unicode borders,
+# case-insensitive search (-i), and the last screen kept after quitting (-X).
+# --pgcli-fix handles pgcli's output quirks. Style 22 suits the Catppuccin
+# Mocha palette; F9 opens its menu. To use only the less wrapper, swap these:
+# pager = /Users/giho.seong/.local/libexec/sql-pager/less
+pager = /Users/giho.seong/.local/libexec/sql-pager/pspg -X -i --vertical-cursor -c 1 -s 22 --force-uniborder --pgcli-fix
 
 # Timing of sql statements and table rendering.
 timing = True
