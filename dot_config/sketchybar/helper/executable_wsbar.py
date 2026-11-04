@@ -11,8 +11,9 @@ per change, so everything changes at the same moment.
   - highlight: the focused window's icon
   - label:     the front app's name (set here, so it can no longer run ahead of the icons)
   - guard:     a tiled window whose frame keeps flipping (app minimum size vs tile) is floated
-  - overflow:  tiled windows that stick out of their monitor (app minimum sizes need more room than the monitor has)
-               turn the workspace into an accordion, whose windows overlap instead of spilling onto the next monitor
+  - under bar: a window whose title bar is under the bar (an app put it there later) is pushed down by aerospace/keepbelow
+  - displays:  when the displays macOS has differ from the ones SketchyBar knows (after unplugging and replugging
+               monitors), SketchyBar is restarted so every monitor gets its bar
 
 Set WSBAR_DRYRUN=1 to log the sketchybar calls instead of sending them.
 """
@@ -43,10 +44,12 @@ INPUT_QUIET_SECONDS = 5.0         # after one of the user's key bindings, moved 
 SWITCH_QUIET_SECONDS = 4.0        # after a workspace switch the periodic check only re-baselines
 STRUCT_POLL_SECONDS = 60.0      # how often AeroSpace is asked for the full window list when nothing seems to change
 HEAL_SECONDS = 20.0
-OVERFLOW_TOLERANCE = 4         # pixels a tiled window may stick out of its monitor (the outer gap is 8)
-OVERFLOW_SETTLE_SECONDS = 4.0   # how long a window must stick out before the layout is changed (apps settle slowly)
-OVERFLOW_COOLDOWN_SECONDS = 120.0
-OVERFLOW_ACTION = "log"           # "log": only record it; "accordion": also turn the workspace into an accordion
+DISPLAY_SETTLE_SECONDS = 6.0     # monitors on a dock come up one after the other: wait before comparing
+DISPLAY_RESTART_GAP_SECONDS = 60.0
+BAR_BAND = 30                    # height of the bar: a window whose top edge is inside it has its title bar under the bar
+UNDER_BAR_GAP_SECONDS = 15.0
+UNDER_BAR_TRIES = 2              # tries per window before it is left alone (a window that will not move)
+KEEPBELOW = os.path.expanduser("~/.config/aerospace/keepbelow")
 RECHECK_SECONDS = 1.0           # a second look when AeroSpace still lists a window the system no longer has
 COALESCE_SECONDS = 0.008        # wait this long for sibling events before drawing
 SETTLE_SECONDS = 0.35           # hold window after a switch (see on_focus_event)
@@ -348,25 +351,57 @@ class _CGRect(ctypes.Structure):
     _fields_ = [("origin", _CGPoint), ("size", _CGSize)]
 
 
-def display_bounds():
-    """The displays as (x0, y0, x1, y1), left to right then top to bottom: the order AeroSpace numbers its monitors
-    in (1-based, so monitor n is item n-1)."""
+def _active_displays():
+    """[(display id, (x0, y0, x1, y1))] of the displays macOS has active right now."""
+    cg = ctypes.CDLL("/System/Library/Frameworks/CoreGraphics.framework/CoreGraphics")
+    cg.CGDisplayBounds.restype = _CGRect
+    cg.CGDisplayBounds.argtypes = [ctypes.c_uint32]
+    cg.CGGetActiveDisplayList.argtypes = [ctypes.c_uint32, ctypes.POINTER(ctypes.c_uint32), ctypes.POINTER(ctypes.c_uint32)]
+    ids = (ctypes.c_uint32 * 16)()
+    n = ctypes.c_uint32()
+    cg.CGGetActiveDisplayList(16, ids, ctypes.byref(n))
+    out = []
+    for i in range(n.value):
+        r = cg.CGDisplayBounds(ids[i])
+        out.append((int(ids[i]), (r.origin.x, r.origin.y, r.origin.x + r.size.w, r.origin.y + r.size.h)))
+    return out
+
+
+def mouse_button_down():
+    """True while the left mouse button is held (a window is being dragged: do not fight the user)."""
     try:
         cg = ctypes.CDLL("/System/Library/Frameworks/CoreGraphics.framework/CoreGraphics")
-        cg.CGDisplayBounds.restype = _CGRect
-        cg.CGDisplayBounds.argtypes = [ctypes.c_uint32]
-        cg.CGGetActiveDisplayList.argtypes = [ctypes.c_uint32, ctypes.POINTER(ctypes.c_uint32), ctypes.POINTER(ctypes.c_uint32)]
-        ids = (ctypes.c_uint32 * 16)()
-        n = ctypes.c_uint32()
-        cg.CGGetActiveDisplayList(16, ids, ctypes.byref(n))
-        rects = []
-        for i in range(n.value):
-            r = cg.CGDisplayBounds(ids[i])
-            rects.append((r.origin.x, r.origin.y, r.origin.x + r.size.w, r.origin.y + r.size.h))
-        return sorted(rects)
+        cg.CGEventSourceButtonState.restype = ctypes.c_bool
+        cg.CGEventSourceButtonState.argtypes = [ctypes.c_int32, ctypes.c_int32]
+        return bool(cg.CGEventSourceButtonState(0, 0))
+    except Exception:
+        return False
+
+
+def system_display_ids():
+    """Ids of the displays macOS has active (empty if that could not be read)."""
+    try:
+        return frozenset(i for i, _ in _active_displays())
     except Exception as e:
-        log("display bounds failed: %s" % e)
-        return []
+        log("display ids failed: %s" % e)
+        return frozenset()
+
+
+def bar_display_ids():
+    """Ids of the displays SketchyBar draws on (None if it did not answer)."""
+    try:
+        return frozenset(int(d["DirectDisplayID"]) for d in json.loads(run([SKETCHYBAR, "--query", "displays"])))
+    except Exception:
+        return None
+
+
+def sketchybar_service_label():
+    """The launchd label of the SketchyBar service (sh.brew.sketchybar or homebrew.mxcl.sketchybar)."""
+    for line in run(["/bin/launchctl", "list"]).splitlines():
+        label = line.split("\t")[-1].strip()
+        if re.match(r"^(sh\.brew|homebrew\.mxcl)\.sketchybar$", label):
+            return label
+    return None
 
 
 def take_snapshot():
@@ -413,8 +448,12 @@ class Daemon:
         self.suspects = {}       # window id -> time first flagged
         self.cooldown = {}       # window id -> time last floated
         self.last_heal = time.time()
-        self.overflow_since = {}      # ws -> when its tiled windows were first seen sticking out of the monitor
-        self.overflow_done = {}       # ws -> when the layout was last changed because of that
+        self.under_bar_at = 0.0
+        self.under_bar_tries = {}      # window id -> times keepbelow was asked about it
+        self.display_ids = None        # displays macOS had active at the last look
+        self.display_changed_at = 0.0
+        self.display_checked = False   # SketchyBar's list was compared for this set of displays
+        self.display_restart_at = 0.0
         self.recheck_pending = False
         self.verify_after = False     # a window or app went: the next full look is checked against the system's list
         self.applied_ticket = 0       # the newest look at the system that has been shown
@@ -534,58 +573,71 @@ class Daemon:
         if snap:
             self.q.put(("snapshot", snap))
 
-    def check_overflow(self, frames, now):
-        """A tiled window cannot shrink below its app's minimum size. When the windows of a workspace need more room
-        than its monitor has, the last one sticks out and ends up on the neighbouring monitor. The layout can not
-        fix that, but an accordion can: its windows overlap instead of sitting side by side. So when a workspace on
-        screen has tiled windows sticking out of their monitor for a few seconds, its layout becomes an accordion
-        (along the direction they stick out). Going back is up to the user (alt-cmd-backslash)."""
-        if now - self.last_switch < SWITCH_QUIET_SECONDS or now - self.last_input < INPUT_QUIET_SECONDS:
-            self.overflow_since.clear()           # windows are being moved around on purpose
+    def check_displays(self, now):
+        """SketchyBar draws one bar per display it knows. After monitors were unplugged and plugged back in (docks bring
+        them up late and with new ids) it can keep an old list, and a monitor then has no bar at all. When the displays
+        macOS has differ from the ones SketchyBar knows a few seconds after they last changed, restart SketchyBar
+        (once per set of displays: if it still disagrees afterwards, a restart will not help)."""
+        ids = system_display_ids()
+        if not ids:
             return
-        s = self.state
-        rects = None
-        rows = {r[0]: r for r in self.last_rows} if self.last_rows else {}
-        for ws in WORKSPACES:
-            mon = s.ws_monitor.get(ws)
-            ids = [w[0] for w in s.windows.get(ws, [])]
-            if mon is None or s.visible_by_monitor.get(mon) != ws or len(ids) < 2:
-                self.overflow_since.pop(ws, None)
+        if ids != self.display_ids:
+            self.display_ids, self.display_changed_at, self.display_checked = ids, now, False
+            return
+        if self.display_checked or now - self.display_changed_at < DISPLAY_SETTLE_SECONDS:
+            return
+        known = bar_display_ids()
+        if known is None:
+            return                                  # SketchyBar did not answer: look again next time
+        self.display_checked = True
+        if known == ids or DRYRUN:
+            return
+        label = sketchybar_service_label()
+        if not label or now - self.display_restart_at <= DISPLAY_RESTART_GAP_SECONDS:
+            log("DISPLAYS macOS has %s, SketchyBar knows %s: not restarted (label %s, last restart %.0fs ago)"
+                % (sorted(ids), sorted(known), label, now - self.display_restart_at))
+            return
+        self.display_restart_at = now
+        log("DISPLAYS macOS has %s, SketchyBar knows %s: restarting SketchyBar (%s)" % (sorted(ids), sorted(known), label))
+        with open(SHAKE_LOG, "a") as fh:
+            fh.write("%s displays %s vs SketchyBar %s: SketchyBar restarted\n" % (time.strftime("%F %T"), sorted(ids), sorted(known)))
+        subprocess.Popen(["/bin/launchctl", "kickstart", "-k", "gui/%d/%s" % (UID, label)],
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+
+    def check_under_bar(self, frames, now):
+        """keepbelow runs when a window is created, but an app can put its window under the bar later (it restores its
+        old position, or macOS gathers the windows at the top of a monitor that was plugged back in). Windows whose top
+        edge is inside the bar are pushed down by keepbelow (floating ones only: it asks AeroSpace, tiled windows are
+        placed by AeroSpace itself). Not while the mouse button is down, and a window that does not move is given up on."""
+        if now - self.under_bar_at < UNDER_BAR_GAP_SECONDS:
+            return
+        try:
+            displays = [b for _, b in _active_displays()]
+        except Exception:
+            return
+        under = set()
+        for wid, f in frames.items():
+            x, y, w, h = f[0], f[1], int(f[2]), int(f[3])
+            if w < 80 or h < 80 or wid not in self.state.app_of:      # only windows AeroSpace knows (not system windows)
                 continue
-            if any("accordion" in rows[i][2] for i in ids if i in rows):
-                self.overflow_since.pop(ws, None)      # already an accordion: nothing to switch to
-                continue
-            if rects is None:
-                rects = display_bounds()
-            if not 1 <= mon <= len(rects):
-                continue
-            x0, y0, x1, y1 = rects[mon - 1]
-            horizontal = vertical = False
-            for i in ids:
-                f = frames.get(i)
-                if not f:
-                    continue
-                fx, fy, fw, fh = f[0], f[1], int(f[2]), int(f[3])
-                if fx < x0 - OVERFLOW_TOLERANCE or fx + fw > x1 + OVERFLOW_TOLERANCE:
-                    horizontal = True
-                if fy < y0 - OVERFLOW_TOLERANCE or fy + fh > y1 + OVERFLOW_TOLERANCE:
-                    vertical = True
-            if not (horizontal or vertical):
-                self.overflow_since.pop(ws, None)
-                continue
-            since = self.overflow_since.setdefault(ws, now)
-            if now - since < OVERFLOW_SETTLE_SECONDS or now - self.overflow_done.get(ws, 0) < OVERFLOW_COOLDOWN_SECONDS:
-                continue
-            layout = "h_accordion" if horizontal else "v_accordion"
-            self.overflow_done[ws] = now
-            self.overflow_since.pop(ws, None)
-            log("OVERFLOW workspace %s: tiled windows stick out of monitor %d (%s)" % (ws, mon, OVERFLOW_ACTION))
-            with open(SHAKE_LOG, "a") as fh:
-                fh.write("%s workspace %s: tiled windows stick out of their monitor: %s\n"
-                         % (time.strftime("%F %T"), ws, ", ".join("%s %s..%s" % (frames[i][0], frames[i][0], frames[i][0] + int(frames[i][2])) for i in ids if i in frames)))
-            if OVERFLOW_ACTION == "accordion" and not DRYRUN:
-                run([AEROSPACE, "layout", "--workspace", ws, "--root", layout])
-                self.q.put(("winchange", 0))
+            for x0, y0, x1, y1 in displays:
+                if x0 <= x + w / 2 < x1 and y0 <= y + 1 < y1:
+                    if y - y0 < BAR_BAND and not (w >= x1 - x0 - 2 and h >= y1 - y0 - 2):   # not a full-screen window
+                        under.add(wid)
+                    break
+        for wid in list(self.under_bar_tries):
+            if wid not in under:
+                del self.under_bar_tries[wid]          # it moved (or went away): forget the count
+        todo = [wid for wid in under if self.under_bar_tries.get(wid, 0) < UNDER_BAR_TRIES]
+        if not todo or mouse_button_down():
+            return
+        for wid in todo:
+            self.under_bar_tries[wid] = self.under_bar_tries.get(wid, 0) + 1
+        self.under_bar_at = now
+        log("UNDER BAR windows %s: asking keepbelow" % sorted(todo))
+        if not DRYRUN and os.path.exists(KEEPBELOW):
+            subprocess.Popen([KEEPBELOW], env=dict(os.environ, KEEPBELOW_NOWAIT="1"),
+                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
 
     def poll_worker(self):
         """Every few seconds: look at the system's window list (cheap, no AeroSpace). Only when the set
@@ -593,6 +645,7 @@ class Daemon:
         try:
             frames = poll_frames()
             now = time.time()
+            self.check_displays(now)
             if not frames:
                 # winframes is missing or failing (a new machine before its Swift helpers were built):
                 # the system's window list is not available, so the slow safety net is all there is
@@ -602,7 +655,7 @@ class Daemon:
                     if snap:
                         self.q.put(("snapshot", snap))
                 return
-            self.check_overflow(frames, now)
+            self.check_under_bar(frames, now)
             ids = frozenset(frames)
             if now - self.last_switch < SWITCH_QUIET_SECONDS and self.last_ids is not None and ids == self.last_ids:
                 # a workspace switch moves every window on and off the screen: that is not shaking, so

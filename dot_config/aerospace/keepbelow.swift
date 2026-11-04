@@ -11,10 +11,11 @@ import Foundation
 // Waits a moment first: apps place their window a little after it is created. Only windows that reach
 // above the line are moved, and only down; full-screen windows are left alone.
 //
-// KEEPBELOW_DRY=1 only prints what would be done.
+// KEEPBELOW_DRY=1 only prints what would be done. KEEPBELOW_NOWAIT=1 looks once, at once.
 
 let dry = ProcessInfo.processInfo.environment["KEEPBELOW_DRY"] != nil
-let waits: [useconds_t] = dry ? [0] : [600_000, 1_400_000]       // look again later: some apps move late
+let noWait = ProcessInfo.processInfo.environment["KEEPBELOW_NOWAIT"] != nil           // run by the bar watcher: the window is there already
+let waits: [useconds_t] = (dry || noWait) ? [0] : [600_000, 1_400_000]       // look again later: some apps move late
 
 // where the tiled windows start, counted from the top of a screen: [gaps] outer.top in aerospace.toml
 // (the notched built-in screen is 28 for the notch + 10, the others 38)

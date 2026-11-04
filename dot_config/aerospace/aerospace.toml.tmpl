@@ -230,10 +230,10 @@ run = ['move-node-to-workspace 9', 'layout v_accordion']
 if.app-id = 'com.tinyspeck.slackmacgap'
 run = 'move-node-to-workspace 0'
 
-# Tiled, always on 7 (next to the browser)
+# Tiled, always on 6 (the spare room on the browser's monitor: the mail windows stay out of 7, where Chrome has no room for them)
 [[on-window-detected]]
 if.app-id = 'com.microsoft.Outlook'
-run = ['layout tiling', 'move-node-to-workspace 7']
+run = ['layout tiling', 'move-node-to-workspace 6']
 
 # KakaoTalk stays a small floating window, in whichever workspace you are in
 [[on-window-detected]]
