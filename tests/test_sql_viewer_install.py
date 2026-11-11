@@ -20,7 +20,7 @@ class InstallTests(unittest.TestCase):
             for path in [home, shims, fixtures]:
                 path.mkdir()
             target = 'aarch64-apple-darwin' if arch == 'arm64' else 'x86_64-apple-darwin'
-            name = f'ddb-tui-v0.3.5-{target}'
+            name = f'ddb-tui-v0.3.6-{target}'
             archive = fixtures / f'{name}.tar.gz'
             with tarfile.open(archive, 'w:gz') as tar:
                 for binary in ['ddb-tui', 'sql-viewer']:

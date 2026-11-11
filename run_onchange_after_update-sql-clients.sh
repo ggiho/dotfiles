@@ -4,8 +4,8 @@
 set -euo pipefail
 
 SRC_ROOT="${DOTFILES_SRC_ROOT:-$HOME/src}"
-MYCLI_REVISION=495439830a64ec6abbad263493ae4640d74ba954
-PGCLI_REVISION=79a8849827b174380ebb617a05ca4e7502971d08
+MYCLI_REVISION=c8f65c5ab00ec75945779e6847ce84520052b87c
+PGCLI_REVISION=0a53ad0488b05475d14520b170ab9651c498061a
 
 if ! command -v uv >/dev/null 2>&1; then
   echo '[WARN] SQL clients: uv is missing; rerun this script after installing Brewfile packages.'
