@@ -126,7 +126,7 @@ search_path_filter = False
 # hjkl move, v copy cell, y copy row, / search, s sort, ? help, q quit.
 # Unsupported output falls back to the existing less wrapper.
 # The pspg and less wrappers remain available beside this wrapper.
-pager = /Users/giho.seong/.local/libexec/sql-pager/viewer
+pager = /bin/sh -c 'exec "$HOME/.local/libexec/sql-pager/viewer"'
 
 # Timing of sql statements and table rendering.
 timing = True

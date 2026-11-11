@@ -167,7 +167,7 @@ enable_pager = True
 # hjkl move, v copy cell, y copy row, / search, s sort, ? help, q quit.
 # Unsupported output falls back to the existing less wrapper.
 # The pspg and less wrappers remain available beside this wrapper.
-pager = /Users/giho.seong/.local/libexec/sql-pager/viewer
+pager = /bin/sh -c 'exec "$HOME/.local/libexec/sql-pager/viewer"'
 
 # Whether to store and retrieve passwords from the system keyring.
 # See the documentation for https://pypi.org/project/keyring/ for your OS.
