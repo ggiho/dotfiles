@@ -6,7 +6,7 @@
 # bash "$(chezmoi source-path)/run_onchange_after_install-ddb-tui.sh"
 set -euo pipefail
 
-DDB_TUI_VERSION=v0.3.4
+DDB_TUI_VERSION=v0.3.5
 BIN="$HOME/.local/bin"
 
 case "$(uname -s)-$(uname -m)" in

@@ -53,6 +53,14 @@ chezmoi update
 bash "$(chezmoi source-path)/run_onchange_after_install-ddb-tui.sh"
 ```
 
+쿼리 입력창과 결과창에서 **Ctrl+X → Ctrl+V**로 왕복합니다. 작성 중인 쿼리·커서와
+결과의 선택·검색·정렬·스크롤을 보존하며 DB 쿼리를 재실행하지 않습니다. CLI 재시작 후
+사용하세요. 세션별 임시 캐시는 정상 종료 시 지워지며 64 MiB를 넘는 결과는 저장하지 않습니다.
+
+기존 Mac의 editable mycli·pgcli 포크도 별도 onchange 스크립트로 갱신됩니다. 다른 브랜치,
+추적 중인 로컬 수정, 분기된 이력이 있으면 덮어쓰지 않고 경고합니다. 버전을 올릴 때는
+스크립트의 revision 두 개도 갱신합니다.
+
 설치 위치는 `~/.local/bin/sql-viewer`입니다. 릴리스 체크섬을 검증한 뒤 설치하며,
 cargo로 설치한 ddb-tui가 있어도 SQL 뷰어는 설치합니다. 실패하면 기존 바이너리를 유지하고
 pager는 less로 표시합니다. 초기 부트스트랩 없이 `chezmoi init --apply ggiho`를 직접 쓰는 경우
@@ -78,6 +86,7 @@ chezmoi add ~/.config/brew/Brewfile
 | `run_onchange_macos-defaults.sh` | macOS 시스템 설정 (변경 시 재실행) |
 | `run_onchange_after_claude-notify-hooks.sh` | Claude Code 알림 hook을 settings.json에 병합 |
 | `run_onchange_after_install-ddb-tui.sh` | ddb-tui·sql-viewer 릴리스 설치 + `ddb` 링크 (버전 바꾸면 재실행) |
+| `run_onchange_after_update-sql-clients.sh` | SQL 결과 왕복 기능이 있는 mycli·pgcli 포크를 안전하게 갱신 |
 | `dot_claude/hooks/` | Claude Code 알림 hook 스크립트 |
 | `dot_zshrc` | zsh 설정 |
 | `dot_config/wezterm/` | WezTerm 설정 |
