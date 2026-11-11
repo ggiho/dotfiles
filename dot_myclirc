@@ -84,7 +84,7 @@ beep_after_seconds = 0
 # sql-insert, sql-update, sql-update-1, sql-update-2, textile, tsv,
 # tsv_noheader, vertical.
 # Recommended: ascii.
-table_format = ascii
+table_format = ascii_escaped
 
 # Redirected otuput format
 # Recommended: csv.
@@ -162,15 +162,12 @@ enable_pager = True
 # -S chops long lines instead of wrapping them, so wide result sets scroll
 # sideways with the arrow keys. mycli only presets LESS=-RXF (no -S), which is
 # why wide tables wrapped here but not in pgcli (it uses -SRXF).
-# ~/.local/libexec/sql-pager/pspg prints a result that fits on the screen as
-# is, opens anything bigger in pspg with these options, and falls back to the
-# less wrapper next to it if pspg fails (see the script). pspg shows a grid:
-# the first column frozen (-c 1), row and column cursors, unicode borders,
-# case-insensitive search (-i), and the last screen kept after quitting (-X).
-# Style 22 suits the Catppuccin Mocha palette; F9 opens its menu. To use only
-# the less wrapper, swap these:
-# pager = /Users/giho.seong/.local/libexec/sql-pager/less
-pager = /Users/giho.seong/.local/libexec/sql-pager/pspg -X -i --vertical-cursor -c 1 -s 22 --force-uniborder
+# sql-viewer: small results print directly; large results open a cell grid.
+# Requires table_format = ascii_escaped to preserve record boundaries.
+# hjkl move, v copy cell, y copy row, / search, s sort, ? help, q quit.
+# Unsupported output falls back to the existing less wrapper.
+# The pspg and less wrappers remain available beside this wrapper.
+pager = /Users/giho.seong/.local/libexec/sql-pager/viewer
 
 # Whether to store and retrieve passwords from the system keyring.
 # See the documentation for https://pypi.org/project/keyring/ for your OS.
