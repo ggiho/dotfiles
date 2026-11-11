@@ -53,11 +53,9 @@ chezmoi update
 bash "$(chezmoi source-path)/run_onchange_after_install-ddb-tui.sh"
 ```
 
-쿼리 입력창과 결과창에서 **Option+T (⌥T)**로 왕복합니다. 작성 중인 쿼리·커서와
-결과의 선택·검색·정렬·스크롤을 보존하며 DB 쿼리를 재실행하지 않습니다. WezTerm이
-Option+T를 명시적으로 Alt+t로 전달합니다. A 홀드 Ctrl 레이어의 G→Home과 tmux의
-Alt+V 복사 모드 예약을 피한 키입니다. CLI 재시작 후
-사용하세요. 세션별 임시 캐시는 정상 종료 시 지워지며 64 MiB를 넘는 결과는 저장하지 않습니다.
+결과 전환용 단축키는 지정하지 않습니다. 사용할 키를 사용자에게 확인한 뒤에만
+CLI·뷰어·터미널 바인딩을 추가합니다. 결과창에서 기존 `q` / Escape로 입력창에 돌아갈 수
+있으며 세션별 결과 캐시와 화면 상태 저장 기능은 유지됩니다.
 
 기존 Mac의 editable mycli·pgcli 포크도 별도 onchange 스크립트로 갱신됩니다. 다른 브랜치,
 추적 중인 로컬 수정, 분기된 이력이 있으면 덮어쓰지 않고 경고합니다. 버전을 올릴 때는
