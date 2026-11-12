@@ -69,6 +69,10 @@ bash "$(chezmoi source-path)/run_onchange_after_install-ddb-tui.sh"
 갱신할 때도 `cargo build --release --locked --bin sql-viewer` 결과를 사용하세요.
 화면 폭을 넘은 줄의 너비 검사는 조기에 끝내 불필요한 전체 문자열 순회를 피합니다.
 
+설치·업데이트 시 Python 바이트코드를 미리 생성하고 `--version`으로 모듈을 한 번
+초기화합니다. DB에 연결하지 않으며, 업데이트 직후 첫 실행의 초기화 부담을 줄입니다.
+재부팅 후 OS 캐시나 실제 네트워크·인증 지연까지 제거하는 것은 아닙니다.
+
 기존 Mac의 editable mycli·pgcli 포크도 별도 onchange 스크립트로 갱신됩니다. 다른 브랜치,
 추적 중인 로컬 수정, 분기된 이력이 있으면 덮어쓰지 않고 경고합니다. 버전을 올릴 때는
 스크립트의 revision 두 개도 갱신합니다.

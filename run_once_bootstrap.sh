@@ -52,13 +52,18 @@ if command -v uv &>/dev/null; then
       if ! git clone --branch "$branch" "$repo" "$dir"; then
         echo "  [WARN] $tool clone 실패 -- 네트워크나 repo 상태를 확인하세요."
         echo "         건너뜀. 수동: git clone -b $branch $repo $dir"
-        echo "               그 뒤: uv tool install --editable $dir $*"
+        echo "               그 뒤: uv tool install --editable $dir --compile-bytecode $*"
         return 0
       fi
     fi
     echo "Installing $tool (editable from $dir)..."
-    uv tool install --editable "$dir" --force "$@" ||
+    if uv tool install --editable "$dir" --force --compile-bytecode "$@"; then
+      # 첫 DB 접속 전에 Python/native 모듈을 초기화한다. DB 연결은 하지 않는다.
+      "$tool" --version >/dev/null 2>&1 ||
+        echo "  [WARN] $tool 초기화 실패 -- 설치 상태를 확인하세요"
+    else
       echo "  [WARN] $tool editable 설치 실패 -- 수동으로 확인하세요"
+    fi
   }
 
   install_editable_tool pgcli https://github.com/ggiho/pgcli.git feature/atuin-history \

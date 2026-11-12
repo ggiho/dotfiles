@@ -40,8 +40,13 @@ update_client() {
     fi
     git -C "$dir" merge --ff-only "$revision" || return 0
   fi
-  uv tool install --editable "$dir" --force "$@" ||
+  if uv tool install --editable "$dir" --force --compile-bytecode "$@"; then
+    # Load Python/native modules during setup, without opening a DB connection.
+    "$tool" --version >/dev/null 2>&1 ||
+      echo "[WARN] $tool: startup warmup failed; check the installation manually"
+  else
     echo "[WARN] $tool: editable installation failed; retry manually"
+  fi
 }
 
 update_client pgcli feature/atuin-history "$PGCLI_REVISION" \

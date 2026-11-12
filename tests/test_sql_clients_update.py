@@ -49,16 +49,31 @@ os.execv(os.environ['TEST_GIT'], [os.environ['TEST_GIT']]+args)
             (shims / 'uv').write_text('#!/bin/sh\nprintf "%s\\n" "$*" >> "$TEST_UV_LOG"\n')
             for p in shims.iterdir():
                 p.chmod(0o755)
+            startup_log = root / 'startup.log'
+            for tool in ['mycli', 'pgcli']:
+                (shims / tool).write_text('#!/bin/sh\nprintf "%s %s\\n" "$(basename "$0")" "$*" >> "$TEST_STARTUP_LOG"\n')
+                (shims / tool).chmod(0o755)
             log = root / 'uv.log'
             env = dict(os.environ, PATH=str(shims)+os.pathsep+os.environ['PATH'],
                        DOTFILES_SRC_ROOT=str(root / 'src'), TEST_REMOTES=str(root / 'remotes'),
-                       TEST_GIT=git, TEST_UV_LOG=str(log))
+                       TEST_GIT=git, TEST_UV_LOG=str(log), TEST_STARTUP_LOG=str(startup_log))
             first = subprocess.run(['bash', str(script)], env=env, capture_output=True, text=True)
             self.assertEqual(first.returncode, 0, first.stderr)
             for checkout, branch, revision in clients:
                 self.assertEqual(subprocess.check_output([git, '-C', str(checkout), 'rev-parse', 'HEAD'], text=True).strip(), revision)
                 self.assertEqual((checkout / 'feature.txt').read_text(), 'roundtrip')
-            self.assertEqual(len(log.read_text().splitlines()), 2)
+            invocations = log.read_text().splitlines()
+            self.assertEqual(len(invocations), 2)
+            self.assertTrue(all('--compile-bytecode' in call for call in invocations))
+            self.assertEqual(startup_log.read_text().splitlines(), ['pgcli --version', 'mycli --version'])
+            # Never initialize a stale command after its replacement failed.
+            startup_log.unlink()
+            (shims / 'uv').write_text('#!/bin/sh\nexit 1\n')
+            failed = subprocess.run(['bash', str(script)], env=env, capture_output=True, text=True)
+            self.assertEqual(failed.returncode, 0, failed.stderr)
+            self.assertEqual(failed.stdout.count('editable installation failed'), 2)
+            self.assertFalse(startup_log.exists())
+            (shims / 'uv').write_text('#!/bin/sh\nprintf "%s\\n" "$*" >> "$TEST_UV_LOG"\n')
             # A developer's tracked edits and branch choice must survive updates.
             (clients[1][0] / 'client.txt').write_text('local edits')
             subprocess.run([git, '-C', str(clients[0][0]), 'checkout', '-b', 'local-work'], check=True, capture_output=True)
@@ -68,6 +83,7 @@ os.execv(os.environ['TEST_GIT'], [os.environ['TEST_GIT']]+args)
             self.assertEqual(second.stdout.count('different branch or local edits'), 2)
             self.assertEqual((clients[1][0] / 'client.txt').read_text(), 'local edits')
             self.assertFalse(log.exists())
+            self.assertFalse(startup_log.exists())
 
 
 if __name__ == '__main__':
