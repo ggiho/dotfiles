@@ -57,6 +57,7 @@ bash "$(chezmoi source-path)/run_onchange_after_install-ddb-tui.sh"
 쿼리·커서와 결과의 선택·검색·정렬·스크롤을 보존하며 SQL을 재실행하지 않습니다.
 쿼리 입력창의 기존 글자 순서 바꾸기를 대체합니다. Alt+E·Alt+T와 전역 터미널 키는
 변경하지 않습니다. 기존 CLI는 재시작하고 새 결과를 조회한 뒤 사용할 수 있습니다.
+결과창 검색은 `f` 또는 `/`로 시작하고, `n` / `N`으로 다음·이전 항목을 찾습니다.
 
 릴리스의 최적화 바이너리를 설치하므로 긴 값에서도 빠르게 표시됩니다. 직접 소스에서
 갱신할 때도 `cargo build --release --locked --bin sql-viewer` 결과를 사용하세요.
