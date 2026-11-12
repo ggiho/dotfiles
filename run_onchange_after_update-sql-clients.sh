@@ -4,7 +4,7 @@
 set -euo pipefail
 
 SRC_ROOT="${DOTFILES_SRC_ROOT:-$HOME/src}"
-MYCLI_REVISION=c7849831d18d62fea53aed89e0ca6c214c367644
+MYCLI_REVISION=830b920bee55b6ca1a39d37cd2085a82dd5c2dea
 PGCLI_REVISION=ddb030eb426a342778ae400f31c623fa9cd6ffa5
 
 if ! command -v uv >/dev/null 2>&1; then
