@@ -11,7 +11,7 @@
 {{- $work := false }}{{- if hasKey . "work" }}{{- $work = .work }}{{- end }}
 
 config-version = 2
-start-at-login = true
+start-at-login = false
 
 # Pick the binding mode for this workspace. This is the only place that does it; the bar
 # (helper/wsbar.py in the SketchyBar config) gets its own events through `aerospace subscribe`.

@@ -1,0 +1,29 @@
+# Centered workspace bar, based on the official OmniWM README demo.
+# Keep the bundled Default style intact; customize through profile overrides.
+profile = "default"
+
+[profiles.default]
+leading = ["omniwm"]
+center = ["workspaces", "scratchpads"]
+trailing = ["system-stats"]
+
+[profiles.default.workspaceBar]
+hideInNativeFullscreen = true
+position = "overlappingMenuBar"
+height = 28.0
+fullWidth = false
+reserveLayoutSpace = true
+transparentBackground = true
+backgroundOpacity = 0.0
+showItemBackgrounds = true
+showAccentHighlights = true
+showLabels = true
+solidBlackBackground = false
+systemStatsButton = true
+xOffset = 0.0
+yOffset = 0.0
+
+[profiles.default.widgets.workspaces]
+indicator = "pills"
+compact = false
+occupiedBackground = true

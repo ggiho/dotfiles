@@ -1,0 +1,50 @@
+#!/bin/bash
+# Source of truth: the working remote Mac's OmniWM configuration.
+# Build native helpers per machine; do not copy its compiled binary or runtime state.
+# helper hash: {{ include "dot_config/omniwm/shortcut-helper.swift" | sha256sum }}
+# app agent hash: {{ include "private_Library/LaunchAgents/com.giho.omniwm.plist.tmpl" | sha256sum }}
+# helper agent hash: {{ include "private_Library/LaunchAgents/com.giho.omniwm-shortcuts.plist.tmpl" | sha256sum }}
+set -euo pipefail
+
+[ "$(uname -s)" = Darwin ] || exit 0
+if [ ! -d /Applications/OmniWM.app ]; then
+  echo 'chezmoi: OmniWM is not installed; install the omniwm cask before activation.' >&2
+  exit 0
+fi
+if ! command -v swiftc >/dev/null 2>&1; then
+  echo 'chezmoi: swiftc is required to build the OmniWM shortcut helper.' >&2
+  exit 1
+fi
+
+CONFIG="$HOME/.config/omniwm"
+STATE="$HOME/.local/state/omniwm"
+mkdir -p "$CONFIG/builds" "$STATE"
+BUILD="$CONFIG/builds/shortcut-helper-$(date +%Y%m%d-%H%M%S)-$$"
+trap 'rm -f "$BUILD.new" "$BUILD.self-test" "$CONFIG/shortcut-helper.new"' EXIT
+swiftc "$CONFIG/shortcut-helper.swift" -o "$BUILD.self-test"
+"$BUILD.self-test" --self-test
+rm "$BUILD.self-test"
+swiftc -O "$CONFIG/shortcut-helper.swift" -o "$BUILD.new"
+mv "$BUILD.new" "$BUILD"
+ln -s "$BUILD" "$CONFIG/shortcut-helper.new"
+mv -f "$CONFIG/shortcut-helper.new" "$CONFIG/shortcut-helper"
+
+DOMAIN="gui/$(id -u)"
+# Release old window-manager ownership before starting OmniWM.
+for label in sh.brew.sketchybar homebrew.mxcl.sketchybar; do
+  launchctl disable "$DOMAIN/$label"
+  launchctl bootout "$DOMAIN/$label" 2>/dev/null || true
+done
+if pgrep -x AeroSpace >/dev/null; then
+  osascript -e 'tell application "AeroSpace" to quit'
+fi
+pkill -TERM -f '/\.config/sketchybar/helper/wsbar\.py([[:space:]]|$)' 2>/dev/null || true
+pkill -TERM -f '/\.config/sketchybar/helper/sysstat --daemon' 2>/dev/null || true
+pkill -TERM -f '/\.config/sketchybar/helper/(appwatch|winframes)( --watch)?$' 2>/dev/null || true
+pkill -TERM -f '^/opt/homebrew/bin/aerospace subscribe focus-changed focused-workspace-changed' 2>/dev/null || true
+
+for label in com.giho.omniwm com.giho.omniwm-shortcuts; do
+  launchctl enable "$DOMAIN/$label"
+  launchctl bootout "$DOMAIN/$label" 2>/dev/null || true
+  launchctl bootstrap "$DOMAIN" "$HOME/Library/LaunchAgents/$label.plist"
+done
