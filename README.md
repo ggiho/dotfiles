@@ -86,6 +86,18 @@ Homebrew가 먼저 설치되어 있어야 합니다.
 
 버전을 갱신할 때는 `run_onchange_after_install-ddb-tui.sh`의 `DDB_TUI_VERSION`을 올립니다.
 
+### 테이블 탐색과 F키 대체 명령
+
+두 CLI에서 `\browse`로 테이블·스키마를 검색하고 컬럼·제약·인덱스 구조를 미리 봅니다.
+구조 창에서 Ctrl+F로 컬럼명을 찾을 수 있습니다. SELECT는 최대 100행 조회 초안을
+입력창에 채우며, 실행은 사용자가 Enter를 눌렀을 때 이루어집니다.
+목록은 접근 가능한 비시스템 테이블·뷰 최대 2,000개이며 임시 테이블은 제외합니다.
+
+F키 바인딩은 제거했습니다. `\keys`로 기능 목록을 확인하고 `\smart`, `\multiline`,
+`\mode`로 전환합니다. mycli의 `\explain SQL`은 실행계획 미리보기이고, pgcli의
+`\explain`은 기존 EXPLAIN ANALYZE 모드(실제 SQL 실행)를 켜거나 끕니다.
+새 Ctrl/Alt 조합키는 추가하지 않았으며 기존 Ctrl+T를 유지합니다.
+
 ### mycli 즐겨찾기
 
 - `\f`: 열자마자 이름·SQL을 검색하고 Enter로 선택합니다. 파라미터가 있으면 값을
