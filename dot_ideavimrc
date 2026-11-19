@@ -8,7 +8,9 @@ let mapleader=" "
 "" -- Suggested options --
 " Show a few lines of context around the cursor. Note that this makes the
 " text scroll if you mouse-click near the start or end of the window.
-set scrolloff=8
+" 0: with >0, IdeaVim snaps the last line to the window bottom at EOF
+" (even in insert mode), where the overlay horizontal scrollbar hides it.
+set scrolloff=0
 
 " Do incremental searching.
 set incsearch
@@ -89,10 +91,23 @@ nmap <leader>fg <Action>(FindInPath)
 nmap <leader>fr <Action>(RecentFiles)
 " Telescope buffers
 nmap <leader>fb <Action>(Switcher)
+" Telescope buffers
+nmap <leader><leader> <Action>(Switcher)
+" Recent locations (Cmd+Shift+E)
+nmap <leader>/ <Action>(RecentLocations)
 " Telescope commands
 nmap <leader>fc <Action>(GotoAction)
-" nvim-tree toggle
-nmap <leader>e <Action>(ActivateProjectToolWindow)
+" LSP references
+nmap grr <Action>(FindUsages)
+" LSP workspace symbols
+nmap <leader>ls <Action>(GotoSymbol)
+" conform format
+nmap <leader>lf <Action>(ReformatCode)
+vmap <leader>lf <Action>(ReformatCode)
+" Database Explorer (Cmd+1)
+nmap <leader>e <Action>(ActivateDatabaseToolWindow)
+" nvim-tree toggle (Cmd+2)
+nmap <leader>fe <Action>(ActivateProjectToolWindow)
 " visual move lines
 vmap J <Action>(MoveLineDown)
 vmap K <Action>(MoveLineUp)
