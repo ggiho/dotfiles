@@ -5,7 +5,7 @@
 검증 기준:
 - 확인일: 2026-03-17
 - 환경: macOS 26.2, Apple Silicon
-- kanata: v1.11.0
+- kanata: v1.12.0 이상 (v1.11.0은 plist의 `--release-grab-on-lock`을 몰라서 못 뜬다 → 문제 9)
 
 ## 현재 파일 구성
 
@@ -32,6 +32,29 @@ macOS에서 kanata를 쓰려면 아래가 필요했다.
 - root 권한 없이 실행하면 pqrs root-only 소켓 접근 문제로 실패할 수 있다.
 - kanata를 두 개 띄우면 `exclusive access and device already open` 에러가 난다.
 - `compiled to never allow cmd`의 `cmd`는 쉘 명령 실행 action을 뜻하고, macOS Command 키(`lmet`)와는 다른 의미다.
+
+## 새 PC에 적용할 때 (chezmoi 환경)
+
+`chezmoi apply`는 **파일만 배포**한다. 데몬 설치와 권한 허용은 해주지 않으므로, apply 직후에는 설정 파일은 최신인데 kanata는 안 떠 있는 상태가 정상이다. 아래를 순서대로 직접 한다.
+
+1. **의존성**: `brew install kanata` + Karabiner VirtualHIDDevice (아래 "처음부터 다시 설치하는 순서" 1~2).
+   - kanata는 **v1.12.0 이상**이어야 한다. plist의 `--release-grab-on-lock`은 v1.12.0부터 있는 옵션이다. 이미 설치돼 있어도 `kanata --version`으로 확인하고 낮으면 `brew upgrade kanata` (→ 문제 9).
+   - VHID 드라이버 버전도 kanata가 지원하는 것과 맞아야 한다 (→ 문제 7).
+2. **데몬 설치**: `sudo ~/.config/kanata/scripts/install-launchd.sh`
+   - 부작용: 그 PC의 Karabiner-Elements grabber와 Karabiner 쪽 VHID 데몬을 끈다 (`bootout` + `disable`). 그 PC에서 Karabiner 규칙을 쓰고 있었다면 이 시점부터 동작하지 않는다.
+   - 이 시점에는 권한이 없어서 kanata가 떴다가 바로 죽고 launchd가 재시작을 반복한다. 정상이다.
+3. **권한 두 개를 그 PC 화면에서 허용**한다. SSH로는 못 한다 (macOS 개인정보 보호 권한은 GUI 승인만 된다).
+   - System Settings → Privacy & Security → **Input Monitoring** → `kanata` 켜기
+   - System Settings → Privacy & Security → **Accessibility** → `kanata` 켜기
+   - 둘이 한꺼번에 안 나온다. kanata는 Input Monitoring을 통과해야 Accessibility를 요청하므로, 첫 번째를 켜고 재시작해야 두 번째 에러가 보인다. 하나 켰는데 또 권한 에러가 나도 정상 진행 중이다.
+   - 목록에 없으면 `+`로 `/opt/homebrew/bin/kanata`를 추가한다.
+   - kanata를 업그레이드하거나 옮긴 뒤에는 macOS가 옛 경로를 기억한다. 기존 `kanata` 항목을 지우고 다시 추가한다.
+4. **재시작**: 권한을 켠 뒤 `sudo launchctl kickstart -k system/local.kanata`
+5. **확인**: `tail /tmp/kanata.out.log`에서 `driver connected: true`, `driver version matched: true`, `keyboard grabbed`가 보이면 끝. 권한 에러는 `tail /tmp/kanata.err.log`에 나온다.
+
+SSH로 원격 PC를 작업할 때:
+- `sudo`는 비밀번호를 TTY로 받으므로 `ssh -t`(또는 `-tt`)로 접속한다.
+- 비대화형 셸의 PATH에는 `/opt/homebrew/bin`이 없다. `export PATH=/opt/homebrew/bin:$PATH`를 먼저 한다.
 
 ## 처음부터 다시 설치하는 순서
 
@@ -217,24 +240,28 @@ IOHIDDeviceOpen error: (iokit/common) not permitted
 - System Settings → Privacy & Security → Input Monitoring
 - System Settings → Privacy & Security → Accessibility
 
+kanata v1.12.0은 빠진 권한을 에러에 직접 적어준다 (`/tmp/kanata.err.log`):
+
+```text
+failed to open keyboard device(s): kanata needs macOS Input Monitoring permission.
+failed to open keyboard device(s): kanata needs macOS Accessibility permission.
+```
+
+- **두 권한이 모두 필요**하고, Input Monitoring → Accessibility 순서로 하나씩 나온다.
+- 둘 다 켰는데도 계속 나오면 옛 경로가 박힌 것이다. `brew upgrade`나 이동 후에 흔하다. 기존 `kanata` 항목을 삭제하고 현재 바이너리를 다시 추가한 뒤 `sudo launchctl kickstart -k system/local.kanata`.
+- 새 PC 순서는 "새 PC에 적용할 때" 참고.
+
 ### 4. `compiled to never allow cmd`
 
 의미:
 - kanata의 외부 명령 실행용 `cmd` action이 비활성화된 빌드라는 뜻
 - macOS Command 키(`lmet`, `rmet`) 매핑과는 다른 의미
 
-### 5. 외부 키보드(Totem 등) a홀드+hjkl 방향키가 안 됨
+### 5. TOTEM에서 A를 누른 채 H/J/K/L을 눌러도 방향키가 나오지 않음
 
-배경:
-- Totem(ZMK) 펌웨어는 a홀드를 `ctrl`로 보낸다. 그래서 a홀드+hjkl = `ctrl+hjkl`이 전송된다.
-- kanata가 이 `ctrl+hjkl`을 방향키로 바꿔야 하는데, 그러려면 (1) kanata가 외부 키보드를
-  grab 해야 하고 (2) `ctrl+hjkl → 방향키` 매핑이 있어야 한다.
-- 현재 `kanata.kbd`는 `macos-dev-names-exclude`로 모든 물리 키보드를 grab 하고,
-  `defoverrides`로 `(lctl h/j/k/l) → (left/down/up/rght)`를 처리한다.
+TOTEM의 ZMK 펌웨어는 A를 길게 누르면 왼쪽 Ctrl을 보낸다. 현재 Kanata는 내장 키보드와 TOTEM 입력을 모두 처리하며, `defoverrides`에서 왼쪽 Ctrl + H/J/K/L을 각각 ←/↓/↑/→로 바꾼다. 이 규칙은 내장 키보드의 물리 왼쪽 Ctrl에도 적용된다.
 
-확인:
-- `sudo kanata --list`로 외부 키보드가 보이는지, VirtualHIDKeyboard 이름이 무엇인지 본다.
-- grab 충돌(Karabiner grabber)이 있으면 `### 4` 아래 grabber 비활성화를 먼저 한다.
+TOTEM을 연결하고 `sudo kanata --list`로 장치 이름을 확인한다. 현재 `macos-dev-names-exclude`에는 Karabiner 가상 키보드만 들어 있다. 가상 키보드 이름이 달라졌다면 문제 6을, 블루투스 재연결 후 Ctrl이 눌린 채 남는다면 문제 8을 참고한다.
 
 ### 6. 외부 키보드가 안 되거나 글자가 멋대로 입력됨 (VirtualHIDKeyboard 버전 불일치)
 
@@ -305,22 +332,29 @@ IOHIDDeviceOpen error: (iokit/common) exclusive access and device already open T
 ```
 증상: `999111;;;` 처럼 멋대로 찍히고, 홈로우모드의 Ctrl(A홀드)이 눌린 채 멈춘다.
 
+절전 복귀나 블루투스 재연결 직후 위 오류와 함께 Ctrl이 눌린 채 남은 사례가 있다. 현재 설정은 TOTEM을 계속 처리한다. 장치가 없어도 Kanata가 실행을 유지하도록 `macos-continue-if-no-devs-found yes`를 쓰고, 화면 잠금 시에는 launchd의 `--release-grab-on-lock` 옵션으로 장치 점유를 해제한다.
+
+Ctrl이 눌린 채 입력을 방해하면 `sudo launchctl bootout system/local.kanata`로 Kanata 서비스를 중지할 수 있다. 이때 내장 키보드의 Kanata 매핑도 함께 꺼진다.
+
+**재연결 때마다 문제가 반복될 때의 우회 방법**은 TOTEM을 Kanata 처리 대상에서 제외하는 것이다. TOTEM을 연결한 상태에서 `sudo kanata --list`로 이름을 확인한 뒤 chezmoi 소스의 `macos-dev-names-exclude`에 그 이름을 추가하고 배포한다. 이 경우 TOTEM에는 ZMK 매핑만 적용되므로 문제 5의 Ctrl + H/J/K/L 방향키 변환도 사라진다.
+
+### 9. `unexpected argument '--release-grab-on-lock' found` (exit 2 무한 재시작)
+
+증상:
+- `sudo launchctl print system/local.kanata`가 `state = spawn scheduled`, `last exit code = 2`, `runs`가 계속 증가
+- `/tmp/kanata.err.log`에 아래가 반복되고 `/tmp/kanata.out.log`는 비어 있음
+
+```text
+error: unexpected argument '--release-grab-on-lock' found
+```
+
 원인:
-- TOTEM(블루투스 ZMK)이 붙었다 떨어질 때, kanata가 이전 grab을 close 못한 채 재open을
-  시도 → `exclusive access` 충돌. 그 상태에서 modifier(Ctrl) release가 전달 안 돼 stuck.
-- 재부팅/절전 복귀 후 특히 잘 난다.
+- kanata가 v1.12.0보다 낮다 (v1.11.0에는 이 옵션이 없다). plist는 chezmoi로 최신이 배포되니 PC마다 kanata 버전이 어긋나기 쉽다.
 
-대응 (정답, 2026-07-14):
-- **kanata가 TOTEM을 grab하지 않게 제외.** `kanata.kbd`의 `macos-dev-names-exclude`에 `"TOTEM"` 추가.
-  (chezmoi 관리 → 소스에서 수정 후 `chezmoi apply` → `kanata --check` → 재시작.)
-- 내장 키보드는 kanata 리매핑, TOTEM은 ZMK 펌웨어 자체 리매핑 사용.
-- exclude 이름은 TOTEM 연결 상태에서 `sudo kanata --list`로 정확히 확인 (기본은 `TOTEM`).
-
-> [!danger] "연결 후 kickstart로 재grab"은 하지 말 것
-> TOTEM을 kanata로 다시 grab하려는 시도 자체가 위 충돌/Ctrl stuck의 원인이다. `### 5`의
-> "kanata로 TOTEM 방향키 처리" 방식은 폐기하고, TOTEM은 exclude한다.
-
-긴급 (Ctrl stuck 중): `sudo launchctl bootout system/local.kanata` → kanata 꺼지면 키보드 즉시 정상.
+대응:
+- `brew upgrade kanata` 후 `sudo launchctl kickstart -k system/local.kanata`
+- plist에서 옵션을 빼는 방식은 쓰지 않는다. 설치본(`/Library/LaunchDaemons`)만 달라져서 다음 `install-launchd.sh`에 원복된다.
+- 업그레이드하면 바이너리 경로가 바뀌므로 권한을 다시 켜야 할 수 있다 (→ 문제 3).
 
 ## 지금 구성에서 기억할 것
 
