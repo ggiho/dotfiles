@@ -1,0 +1,55 @@
+#!/usr/bin/python3
+"""Alt-F: focus an existing Finder window, or create one on the current workspace."""
+import fcntl
+from pathlib import Path
+import subprocess
+import time
+
+AEROSPACE = "/opt/homebrew/bin/aerospace"
+
+
+def aero(*args):
+    return subprocess.check_output([AEROSPACE, *args], text=True, timeout=5).strip()
+
+
+def windows():
+    rows = aero("list-windows", "--monitor", "all", "--app-bundle-id", "com.apple.finder",
+                "--format", "%{window-id}|%{workspace}")
+    return [row.split("|", 1) for row in rows.splitlines() if "|" in row]
+
+
+def main():
+    state = Path.home() / ".local/state/aerospace"
+    state.mkdir(parents=True, exist_ok=True)
+    with (state / "finder-here.lock").open("w") as lock:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            return
+        workspace = aero("list-workspaces", "--focused")
+        if not workspace:
+            raise RuntimeError("No focused workspace")
+        candidates = windows()
+        if candidates:
+            window_id, _ = next((w for w in candidates if w[1] == workspace), candidates[0])
+            aero("focus", "--window-id", window_id)
+            return
+        if not candidates:
+            # Creating without 'activate' avoids focusing Finder's old workspace.
+            subprocess.run(["/usr/bin/osascript", "-e",
+                            'tell application "Finder" to make new Finder window'],
+                           check=True, capture_output=True, timeout=10)
+            deadline = time.monotonic() + 5
+            while not candidates and time.monotonic() < deadline:
+                time.sleep(0.05)
+                candidates = windows()
+        if not candidates:
+            raise RuntimeError("Finder window was not registered by AeroSpace")
+        window_id, current = next((w for w in candidates if w[1] == workspace), candidates[0])
+        if current != workspace:
+            aero("move-node-to-workspace", "--window-id", window_id, workspace)
+        aero("focus", "--window-id", window_id)
+
+
+if __name__ == "__main__":
+    main()
