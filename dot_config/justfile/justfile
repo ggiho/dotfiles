@@ -12,7 +12,9 @@
 # schema/config diffs. mysql-create-user, ddb-create/-add-gsi/-copy/-capacity/
 # -ttl and mysql-checksum/-config-diff stay here as the CLI fallback for when the
 # portal is down. What only lives here: mysqlsh dump/load, user dump/import,
-# binlog, pt-osc, redshift-*, rsync/ssh, sysbench, docker.
+# binlog, pt-osc, redshift-*, rsync/ssh, sysbench, docker, mysql-pk-diff/-sync
+# (added 2026-10-01: PK-level compare and repair of a table across two hosts --
+# MySQL data work, not DMS management, so it is not in db-portal's DMS pages).
 #
 # Judged by how often the underlying command was run, NOT by recipe name -- the
 # `j` wrapper only started recording recipe names on 2026-08-31, and matching
@@ -235,8 +237,26 @@ setup_conn() {
 run_sql() { MYSQL_PWD="$pw" mysql -h "$host" -P "$port" -u "$user" --connect-timeout=10 -B "$@"; }
 '''
 
+# mysql-pk-diff / -sync 용. setup_conn 은 hosts 파일 한 줄만 받으니 라벨("Horizon PROD")이면
+# 그 줄로 바꿔 넘기고, 고른 접속을 ${prefix}_HOST/PORT/USER/PW/LABEL/RAW 로 export 한다 --
+# lib/pk_sync.py 가 env 로 받아서 비밀번호가 argv 에 나오지 않는다.
+PK_SYNC_CONN    := '''
+conn_env() {  # prefix prompt [label | hosts 한 줄 | 빈 값=fzf]
+  local raw="${3:-}"
+  if [ -n "$raw" ] && [[ "$raw" != *:* ]]; then
+    raw=$(grep -vE "^#|^$" "$HOSTS_FILE" | awk -F: -v n="$raw" 'tolower($1)==tolower(n)' | head -1)
+    [ -n "$raw" ] || { echo "hosts 파일에 없는 라벨입니다: $3" >&2; return 1; }
+  fi
+  setup_conn "$2" "$raw" || return 1
+  export "$1_HOST=$host" "$1_PORT=$port" "$1_USER=$user" "$1_PW=$pw" "$1_LABEL=$label" "$1_RAW=$raw_line"
+}
+'''
+
 # Bordered-table renderer shared by every recipe that prints tabular output.
 TABLE_PY        := justfile_directory() + "/lib/table.py"
+# mysql-pk-diff / -sync. pymysql 이 필요해서 mycli tool venv 의 파이썬을 쓴다 (mycli 가 pymysql 에 의존).
+PK_SYNC_PY      := justfile_directory() + "/lib/pk_sync.py"
+PK_SYNC_PYTHON  := env_var_or_default("PK_SYNC_PYTHON", env_var("HOME") + "/.local/share/uv/tools/mycli/bin/python")
 # psql is not installed; these run through the pgcli tool venv, which has psycopg.
 PGQ_PY          := justfile_directory() + "/lib/pgq.py"
 PGQ_PYTHON      := env_var_or_default("PGQ_PYTHON", env_var("HOME") + "/.local/share/uv/tools/pgcli/bin/python")
@@ -994,6 +1014,60 @@ mysql-checksum tables="" source="" target="":
       printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$t" "$sr" "$tr" "$sc" "$tc" "$m"
     done <<< "$tbls"
   } | COLOR="$color" python3 "{{TABLE_PY}}"
+
+# 두 호스트의 테이블을 PK 로 비교한다. 이름이 달라도 된다 (ASSET.ASSET vs etldata.asset_ASSET) --
+# mysql-checksum 은 양쪽 이름이 같아야 해서 DMS 타겟에는 못 쓴다. 조회만 하고, 고치는 건 mysql-pk-sync.
+# PK 순서로 자른 256 구간의 건수·해시를 맞춰 보고, 다른 구간만 PK 를 뽑아 extra/missing/changed 를 남긴다.
+# 복제 중인 타겟이면 따라잡은 뒤에 돌린다: 아직 반영 안 된 변경도 차이로 잡힌다.
+# hint: src_table: 소스 schema.table
+# hint: tgt_table: 타겟 schema.table (비우면 src_table 과 같은 이름)
+# hint: source: 소스 hosts 라벨("Horizon PROD") 또는 hosts 파일 한 줄 (비우면 fzf)
+# hint: target: 타겟 hosts 라벨("DataMart PROD") 또는 hosts 파일 한 줄 (비우면 fzf)
+# hint: columns: 값까지 비교할 컬럼 (콤마 구분, * = 공통 컬럼 전부). 비우면 PK 존재 여부만 -- 값 비교는 테이블을 다 읽는다
+# hint: outdir: 결과 디렉터리 (기본 ./pk-diff_<tgt_table>_<시각>)
+[group('mysql')]
+mysql-pk-diff src_table tgt_table="" source="" target="" columns="" outdir="":
+  #!/usr/bin/env bash
+  set -euo pipefail
+  HOSTS_FILE="{{HOSTS_FILE}}"
+  {{MYSQL_CONNECT}}
+  {{PK_SYNC_CONN}}
+  conn_env SRC "source host" "{{source}}" || exit 0
+  conn_env TGT "target host" "{{target}}" || exit 0
+  tgt="{{tgt_table}}"; [ -n "$tgt" ] || tgt="{{src_table}}"
+  out="{{outdir}}"; [ -n "$out" ] || out="pk-diff_${tgt//./_}_$(date +%Y%m%d-%H%M%S)"
+  "{{PK_SYNC_PYTHON}}" "{{PK_SYNC_PY}}" diff "{{src_table}}" "$tgt" --columns "{{columns}}" --outdir "$out"
+
+# mysql-pk-diff 결과대로 타겟을 소스에 맞춘다. 플래그 없이 실행하면 계획만 보여준다(dry-run).
+#   extra (타겟에만)                 PK 로 DELETE. 묶음마다 소스를 다시 봐서 그새 소스에 생긴 행은 둔다
+#   missing / changed (소스에만/다름)  그 순간의 소스 값을 읽어 INSERT .. ON DUPLICATE KEY UPDATE
+# 끝나면 같은 구간을 다시 비교한다. 2026-10-01 DMS resume 이 소스 트랜잭션 중간에서 시작해
+# asset/customer 에 30만 행씩 남긴 것을 손으로 지운 절차를 옮겼다. 확인은 타겟 테이블 이름을
+# 쳐서 받는다: [confirm] 은 본문보다 먼저 돌아서 디렉터리에 적힌 대상을 보여줄 수 없다.
+# hint: dir: mysql-pk-diff 결과 디렉터리 (비우면 현재 디렉터리의 pk-diff_* 에서 fzf)
+# hint: execute: true 면 실제로 고친다
+# hint: chunk: 묶음 크기 (기본 2000. 행 락을 짧게 잡으려고 작게 둔다)
+[group('mysql')]
+mysql-pk-sync dir="" execute="false" chunk="2000":
+  #!/usr/bin/env bash
+  set -euo pipefail
+  HOSTS_FILE="{{HOSTS_FILE}}"
+  {{MYSQL_CONNECT}}
+  {{PK_SYNC_CONN}}
+  d="{{dir}}"
+  [ -n "$d" ] || d=$(ls -dt pk-diff_*/ 2>/dev/null | fzf --prompt="pk-diff 결과> " --height=40% --scheme=default || true)
+  d="${d%/}"; [ -n "$d" ] || exit 0
+  [ -f "$d/meta.json" ] || { echo "mysql-pk-diff 결과가 아닙니다: $d" >&2; exit 1; }
+  conn_env SRC "source host" "$(jq -r '.source.raw' "$d/meta.json")" || exit 1
+  conn_env TGT "target host" "$(jq -r '.target.raw' "$d/meta.json")" || exit 1
+  "{{PK_SYNC_PYTHON}}" "{{PK_SYNC_PY}}" sync "$d" --chunk "{{chunk}}"
+  # just 인자는 위치로만 받는다: "execute=true" 라고 치면 그 글자 그대로 execute 에 들어간다.
+  if [ "{{execute}}" != "true" ]; then echo ">> dry-run only. 실행: j mysql-pk-sync $d true" >&2; exit 0; fi
+  tgt=$(jq -r '.target.schema + "." + .target.table' "$d/meta.json")
+  printf '%s 의 %s 를 고칩니다. 확인하려면 타겟 테이블 이름을 그대로 입력: ' "$TGT_LABEL" "$tgt"
+  read -r reply || reply=""
+  [ "$reply" = "$tgt" ] || { echo "Aborted."; exit 1; }
+  "{{PK_SYNC_PYTHON}}" "{{PK_SYNC_PY}}" sync "$d" --chunk "{{chunk}}" --execute
 
 # 환경 비교 진입점. 호스트 쌍을 한 번만 고르고, 무엇을 비교할지 반복해서 고른다.
 # 개별 recipe(mysql-config-diff / -grants-diff / mysql-checksum)도 그대로 쓸 수 있다.
