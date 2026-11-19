@@ -78,6 +78,7 @@ KakaoTalk → 플로팅(워크스페이스 이동 없음), 나머지 전부 → 
 
 - `/tmp/wsbar.<uid>.log` (wsbar), `/tmp/sketchybar-ws-apps.shake.log`(흔들림·모니터 재시작 기록)
 - `/opt/homebrew/var/log/sketchybar/sketchybar.err.log`
+- 데몬의 pid·잠금 파일은 `~/.local/state/wsbar/`(`wsbar.pid`, `sysstat.pid`). `/tmp`에 두면 macOS가 며칠 뒤 지워서 데몬이 둘로 늘어난다(실제로 겪음).
 - 이벤트까지 보려면 `touch /tmp/wsbar-debug-on` 후 `wsbar-ensure.sh restart`. 끝나면 파일을 지운다.
 
 ## 새 Mac / 원격

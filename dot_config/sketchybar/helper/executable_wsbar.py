@@ -58,7 +58,11 @@ GUARD_GAP = 2.0                 # at most one corrective focus per this many sec
 UID = os.getuid()
 DRYRUN = bool(os.environ.get("WSBAR_DRYRUN"))
 DEBUG = os.path.exists("/tmp/wsbar-debug-on")      # touch this file to log every event and decision
-PIDFILE = "/tmp/wsbar.%d.pid" % UID      # also the lock file: the running instance holds a flock on it
+# The pid file is also the lock file: the running instance holds a flock on it. It must not live in /tmp: macOS
+# removes files there that were not touched for a few days, a new daemon would then lock a NEW file while the old one
+# keeps running (two daemons, each answering every event: two focus commands at once).
+STATE_DIR = os.path.expanduser("~/.local/state/wsbar")
+PIDFILE = STATE_DIR + "/wsbar.pid"
 LOGFILE = "/tmp/wsbar.%d.log" % UID
 SHAKE_LOG = "/tmp/sketchybar-ws-apps.shake.log"
 
@@ -966,6 +970,7 @@ def take_lock(replace):
     `replace` an older instance is asked to quit and this one takes over; without it this one
     just gives up. (Checking a pid file and then writing it let two starts that happen at the
     same moment both win.) Returns the open file, which must stay open for the process lifetime."""
+    os.makedirs(STATE_DIR, mode=0o700, exist_ok=True)
     f = os.fdopen(os.open(PIDFILE, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600), "r+")
     deadline = time.time() + 3.0
     asked = None

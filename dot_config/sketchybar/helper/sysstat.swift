@@ -143,7 +143,10 @@ if CommandLine.arguments.contains("--daemon") {
 
     if !args.contains("--once") {
         // one instance: whoever holds the lock on the pid file is the daemon
-        let fd = open("/tmp/sysstat.\(getuid()).pid", O_RDWR | O_CREAT | O_NOFOLLOW, 0o600)
+        // (not in /tmp: macOS removes files there that were not touched for days, and a second daemon would then lock a new file)
+        let stateDir = NSHomeDirectory() + "/.local/state/wsbar"
+        try? FileManager.default.createDirectory(atPath: stateDir, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+        let fd = open(stateDir + "/sysstat.pid", O_RDWR | O_CREAT | O_NOFOLLOW, 0o600)
         let deadline = Date().addingTimeInterval(3)
         var asked: Int32 = 0
         while flock(fd, LOCK_EX | LOCK_NB) != 0 {
