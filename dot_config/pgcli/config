@@ -96,7 +96,8 @@ history_file = default
 # Store query history in atuin, tagged with atuin_author (atuin search --author
 # pgcli). Built into the ggiho/pgcli fork. The entries are ordinary atuin
 # history: the shell's atuin search shows them too, and they sync if atuin sync
-# is set up.
+# is set up. Statements that set a password (CREATE ROLE ... PASSWORD) are
+# stored too, in clear text, so they sync as well.
 atuin_history = True
 atuin_author = pgcli
 

@@ -44,7 +44,9 @@ history_file = ~/.mycli-history
 # Store query history in atuin, tagged with atuin_author (atuin search --author
 # mycli). The entries are ordinary atuin history: the shell's atuin search shows
 # them too, and they sync if atuin sync is set up. Entries already in
-# history_file stay readable; they are not imported.
+# history_file stay readable; they are not imported. Unlike history_file,
+# lines with a password (CREATE USER ... IDENTIFIED BY, SET PASSWORD) are
+# stored too, in clear text, so they sync as well.
 atuin_history = True
 
 # Author tag applied to entries written to atuin.
