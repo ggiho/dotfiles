@@ -19,6 +19,8 @@ curl -fsSL https://raw.githubusercontent.com/ggiho/dotfiles/main/install.sh | ba
 
 자동화되지 않는 항목(macOS 권한, 비밀 파일, 앱 내부 설치)은 [docs/manual-setup.md](docs/manual-setup.md) 참고.
 
+기존 Mac에서 작업을 이어갈 때는 [작업 디렉토리 복원](docs/workspace-migration.md)을 참고.
+
 ---
 
 ## 관리

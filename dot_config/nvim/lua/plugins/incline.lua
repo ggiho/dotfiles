@@ -11,6 +11,13 @@ return {
 				hide = {
 					only_win = false,
 				},
+				highlight = {
+					groups = {
+						-- 기본값 NormalFloat(#181825 검정 배경) 대신 Normal → 투명 배경
+						InclineNormal = { group = "Normal", default = true },
+						InclineNormalNC = { group = "Normal", default = true },
+					},
+				},
 				render = function(props)
 					local bufname = vim.api.nvim_buf_get_name(props.buf)
 					local filename = vim.fn.fnamemodify(bufname, ":t")

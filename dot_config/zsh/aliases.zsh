@@ -23,6 +23,13 @@ alias ob="obsidian"
 alias cc="claude --dangerously-skip-permissions"
 alias pgcli="~/.local/bin/pgcli"
 alias lg="lazygit"
+# fd/fzf/bat file finders that open results in nvim (from Sin-cy/dotfiles)
+alias nzo="~/.config/zsh/scripts/zoxide_openfiles_nvim.sh"
+alias nlof="~/.config/zsh/scripts/fzf_listoldfiles.sh"
+# throwaway nvim config (~/.config/nvim-scratch) for trying plugins without touching the real one
+alias nvim-scratch="NVIM_APPNAME=nvim-scratch nvim"
+# create a private GitHub repo from cwd, push everything, open it (fails if `origin` already exists)
+alias gh-create='gh repo create --private --source=. --remote=origin && git push -u --all && gh browse'
 
 function yz() {
   local tmp cwd
@@ -111,6 +118,197 @@ __j_confirm() {
   [[ "$reply" == (y|Y|yes|YES) ]]
 }
 
+# Reuse the justfile's Catppuccin renderer, including its CJK width handling.
+# Custom justfiles without that renderer still get a readable plain fallback.
+__j_card() {
+  local renderer="${JUSTFILE:h}/lib/table.py" color=0 card_key card_value
+  local width=${COLUMNS:-80}
+  (( width <= 0 )) && width=80
+  local cell=$(( width - 20 ))
+  (( cell < 12 )) && cell=12
+  (( cell > 88 )) && cell=88
+  [[ -t 2 && -z ${NO_COLOR+x} && ${TERM:-dumb} != dumb ]] && color=1
+  if [[ -f "$renderer" ]]; then
+    {
+      while (( $# >= 2 )); do
+        card_key="${1//$'\n'/ }"
+        card_value="${2//$'\n'/ }"
+        printf '%s\t%s\n' "${card_key//$'\t'/ }" "${card_value//$'\t'/ }"
+        shift 2
+      done
+    } | COLOR="$color" CELL="$cell" python3 "$renderer" >&2 && return 0
+  fi
+  print -u2 -- "╭─ $1 · $2"
+  shift 2
+  while (( $# >= 2 )); do
+    print -u2 -- "│ $1: $2"
+    shift 2
+  done
+  print -u2 -- '╰────────────────────────'
+}
+
+# A pending shell autosuggestion can arrive after vared loads an argument's
+# default. Its asynchronous reply uses this widget; mute it only during vared.
+__j_vared_no_suggestion() {
+  POSTDISPLAY=''
+}
+
+# Return the raw argument through REPLY; presentation never changes its value.
+__j_prompt() {
+  local name="$1" default="$2" hint="$3" required="$4" step="$5" total="$6"
+  local input_value="$default" selected choice choice_key choice_label
+  local controls='Enter: 기본값 유지 · Ctrl-C: 취소'
+  local -a choices=() ordered=()
+  case "$default" in
+    true|false)
+      choices=($'false\t사용 안 함 · false' $'true\t사용함 · true') ;;
+  esac
+  case "$name" in
+    on_exist)
+      choices=($'error\t일반 적재: 기존 객체가 있으면 중단'
+               $'ignore\t일반 적재: 기존 객체의 DDL 무시'
+               $'drop\t일반 적재: 삭제 후 재생성 · 기존 데이터 삭제') ;;
+    duplicates)
+      choices=($'error\t빈 타깃 적재 · 전체 비우기 선택 시 먼저 비움'
+               $'skip\t기존 행 유지 · 중복 키 행 건너뛰기'
+               $'replace\t중복 키 행만 교체 · 다른 기존 행은 유지') ;;
+    clear_target)
+      choices=($'false\t기존 데이터 유지 · 중복 키 처리만 적용'
+               $'true\t선택한 타깃 테이블 전체 비우고 적재 · 롤백 불가') ;;
+    dry_run)
+      choices=($'false\t실제 실행 · false' $'true\t사전 검사만 · true') ;;
+    interactive)
+      choices=($'false\t일반 / 파일 매핑 · false' $'true\t대화형 매핑 · true') ;;
+  esac
+  (( ${#choices[@]} )) && controls='Enter: 선택 · Esc: 취소'
+  __j_card "설정 $step/$total" "$name" \
+    설명 "${hint:-사용할 값을 입력하세요}" \
+    구분 "$required" 기본값 "${default:-(비움)}" \
+    조작 "$controls"
+  if (( ${#choices[@]} )); then
+    for choice in "${choices[@]}"; do
+      choice_key="${choice%%$'\t'*}"
+      choice_label="${choice#*$'\t'}"
+      if [[ "$choice_key" == "$default" ]]; then
+        ordered=("$choice_key"$'\t'"$choice_label [기본]" "${ordered[@]}")
+      else
+        ordered+=("$choice_key"$'\t'"$choice_label")
+      fi
+    done
+    selected=$(printf '%s\n' "${ordered[@]}" \
+      | fzf --prompt="$name> " --height=40% --scheme=default --no-sort \
+        --delimiter=$'\t' --with-nth=2) || return 1
+    [[ -n "$selected" ]] || return 1
+    REPLY="${selected%%$'\t'*}"
+    for choice in "${choices[@]}"; do
+      [[ "${choice%%$'\t'*}" == "$REPLY" ]] && return 0
+    done
+    return 1
+  fi
+  local saved_suggestion=''
+  zmodload zsh/zleparameter
+  if (( ${+widgets[autosuggest-suggest]} )); then
+    saved_suggestion="__j_saved_suggestion_$$"
+    while (( ${+widgets[$saved_suggestion]} )); do saved_suggestion+='_'; done
+    zle -A autosuggest-suggest "$saved_suggestion"
+    zle -N autosuggest-suggest __j_vared_no_suggestion
+  fi
+  {
+    vared -p "  $name › " input_value || return 1
+  } always {
+    if [[ -n "$saved_suggestion" ]]; then
+      zle -A "$saved_suggestion" autosuggest-suggest
+      zle -D "$saved_suggestion"
+    fi
+  }
+  REPLY="${input_value:-$default}"
+}
+
+__j_schema_prompt() {
+  local target_host="$1" target_user="$2" target_port="${3:-3306}" default="$4"
+  local hint="$5" required="$6" step="$7" total="$8"
+  local pw schemas='' lookup='목록 조회 완료' selected choice_id schema
+  local -a schema_values=("$default" '') schema_options=()
+  pw=$(security find-generic-password -s mysql-db-connect -a "$target_user" -w 2>/dev/null || true)
+  if ! schemas=$(MYSQL_PWD="$pw" mysql --host="$target_host" --port="$target_port" \
+      --user="$target_user" --connect-timeout=10 --batch --skip-column-names \
+      -e "SELECT SCHEMA_NAME FROM information_schema.SCHEMATA
+          WHERE SCHEMA_NAME NOT IN ('mysql','sys','information_schema','performance_schema')
+          ORDER BY SCHEMA_NAME"); then
+    schemas=''
+    lookup='목록 조회 실패 · 직접 입력하거나 기본 설정을 선택하세요'
+  fi
+  if [[ -n "$default" ]]; then
+    schema_options+=("1"$'\t'"[기본값 유지] $default")
+  else
+    schema_options+=($'1\t[비움] 매핑 파일/덤프의 스키마 사용 (대화형이면 뒤에서 선택)')
+  fi
+  schema_options+=($'2\t[직접 입력] 스키마 이름 입력')
+  if [[ -n "$schemas" ]]; then
+    for schema in "${(@f)schemas}"; do
+      [[ "$schema" == "$default" ]] && continue
+      schema_values+=("$schema")
+      schema_options+=("${#schema_values[@]}"$'\t'"$schema")
+    done
+  fi
+  __j_card "설정 $step/$total" target_schema \
+    '대상 서버' "$target_host:$target_port" '접속 계정' "$target_user" \
+    설명 "${hint:-대상 DB의 스키마를 선택하세요}" 조회 "$lookup" \
+    조작 'Enter: 선택 · Esc: 취소'
+  selected=$(printf '%s\n' "${schema_options[@]}" \
+    | fzf --prompt='target_schema> ' --height=40% --scheme=default --no-sort \
+      --delimiter=$'\t' --with-nth=2) || return 1
+  choice_id="${selected%%$'\t'*}"
+  [[ "$choice_id" == <-> ]] || return 1
+  (( choice_id >= 1 && choice_id <= ${#schema_values[@]} )) || return 1
+  if (( choice_id == 2 )); then
+    __j_prompt target_schema "$default" "$hint" "$required" "$step" "$total" || return 1
+  else
+    REPLY="${schema_values[$choice_id]}"
+  fi
+  __j_card '대상 스키마' "${REPLY:-(매핑 파일/덤프 설정)}" \
+    '대상 서버' "$target_host:$target_port" '접속 계정' "$target_user"
+}
+
+__j_mapping_prompt() {
+  local default="$1" hint="$2" required="$3" step="$4" total="$5"
+  local helper="${JUSTFILE:h}/lib/mysqlsh_load.py" mapping_list='' lookup selected choice_id mapping_file
+  local -a mapping_values=("$default" '') mapping_choices=()
+  if [[ -f "$helper" ]] && mapping_list=$(python3 "$helper" --list-mappings "$PWD"); then
+    lookup='현재 폴더와 하위 한 단계의 저장된 매핑'
+  else
+    lookup='목록 조회 실패 · 실행 단계에서 선택하거나 직접 입력하세요'
+  fi
+  if [[ -n "$default" ]]; then
+    mapping_choices+=("1"$'\t'"[기본값 유지] $default")
+  else
+    mapping_choices+=($'1\t[나중에 선택] 덤프 선택 후 파일/새 테이블 매핑 선택')
+  fi
+  mapping_choices+=($'2\t[직접 입력] 매핑 JSON 경로 입력')
+  if [[ -n "$mapping_list" ]]; then
+    for mapping_file in "${(@f)mapping_list}"; do
+      [[ "$mapping_file" == "$default" ]] && continue
+      mapping_values+=("$mapping_file")
+      mapping_choices+=("${#mapping_values[@]}"$'\t'"$mapping_file")
+    done
+  fi
+  __j_card "설정 $step/$total" mapping \
+    설명 "${hint:-저장된 매핑을 선택하거나 덤프 선택 후 새로 연결하세요}" \
+    조회 "$lookup" 조작 'Enter: 선택 · Esc: 취소'
+  selected=$(printf '%s\n' "${mapping_choices[@]}" \
+    | fzf --prompt='mapping> ' --height=40% --scheme=default --no-sort \
+      --delimiter=$'\t' --with-nth=2) || return 1
+  choice_id="${selected%%$'\t'*}"
+  [[ "$choice_id" == <-> ]] || return 1
+  (( choice_id >= 1 && choice_id <= ${#mapping_values[@]} )) || return 1
+  if (( choice_id == 2 )); then
+    __j_prompt mapping "$default" "$hint" "$required" "$step" "$total" || return 1
+  else
+    REPLY="${mapping_values[$choice_id]}"
+  fi
+  __j_card '매핑 설정' "${REPLY:-(덤프 선택 후 파일/테이블 연결 선택)}"
+}
+
 j() {
   # `alias j=just` is just's documented convention, so keep that meaning when
   # arguments are given and only open the picker when called bare. The flags are
@@ -125,9 +323,10 @@ j() {
     return
   fi
 
-  local selected recipe sig rest param name default prompt_str val cmd dry line fzf_selected
+  local selected recipe sig rest param name default val cmd dry line fzf_selected
   local -a params args db_hosts db_labels db_users host_options just_lines
   local -A hints
+  local -A input_values=()
   local hosts_file="${MYSQL_HOSTS_FILE:-$HOME/.config/mysql/hosts}"
   local selected_user=""
 
@@ -155,9 +354,14 @@ j() {
   # Drop blank lines and the `[group]` headers that --list started emitting once
   # recipes carry [group(...)] attributes. Neither is a selectable recipe, and a
   # header would parse as a recipe named `[mysqlsh]`.
+  # Preview the recipe source on the right, like `just --choose`. A module row is
+  # "MOD RECIPE ...", shown with `just --show MOD::RECIPE`; the preview runs in a
+  # separate shell, so the module names travel in the command string.
+  local _pv
+  _pv="m=' ${mod_names[*]} '; if [ -n {2} ] && [ \"\${m#* {1} }\" != \"\$m\" ]; then r={1}::{2}; else r={1}; fi; just --justfile ${(q)JUSTFILE} --color always --show \"\$r\" 2>/dev/null"
   selected=$(printf '%s\n' "$list_out" \
     | sed -e '/^[[:space:]]*$/d' -e '/^[[:space:]]*\[[^]]*\][[:space:]]*$/d' \
-    | fzf --prompt="just> " --height=40%)
+    | fzf --prompt="just> " --height=80% --preview "$_pv" --preview-window=right,60%)
   [ -z "$selected" ] && return
 
   # ── Detect module vs top-level recipe ──
@@ -213,7 +417,7 @@ j() {
   params=()
   [[ -n "$rest" ]] && params=("${(z)rest}")
 
-  local default_user=""
+  local default_user="" input_step=0 input_required
   if [[ -f "$hosts_file" ]]; then
     local _line _label _host _user
     while IFS= read -r _line; do
@@ -232,16 +436,19 @@ j() {
 
   args=()
   for param in "${params[@]}"; do
+    (( input_step += 1 ))
     name=${param%%=*}
     default=""
+    input_required="필수"
     if [[ "$param" == *=* ]]; then
+      input_required="선택"
       default=${param#*=}
       default=${default#\"}
       default=${default%\"}
     fi
 
     if [[ "$name" == *host* && ${#host_options[@]} -gt 0 ]]; then
-      local _q="" _sel="" _out=""
+      local _q="" _sel="" _out="" _picked_label="직접 입력"
       _out=$(printf '%s\n' "${host_options[@]}" \
         | fzf --prompt="$name> " --height=40% --print-query)
       if [[ "$_out" == *$'\n'* ]]; then
@@ -257,19 +464,20 @@ j() {
           if [[ "${host_options[$idx]}" == "$_sel" ]]; then
             val="${db_hosts[$idx]}"
             selected_user="${db_users[$idx]}"
+            _picked_label="${db_labels[$idx]}"
             matched=1
             break
           fi
         done
         (( matched )) || val="$_sel"
-        echo "$name: $val"
       elif [[ -n "$_q" ]]; then
         # typed a host not in the list -> use it as-is (user falls back to default_user)
         val="$_q"
-        echo "$name: $val"
       else
         vared -p "$name: " val
       fi
+      __j_card '접속 대상' "$_picked_label" "$name" "$val" \
+        '기본 계정' "${selected_user:-$default_user}"
     else
       if [[ "$name" == *user* ]]; then
         if [[ -n "$selected_user" ]]; then
@@ -279,23 +487,39 @@ j() {
         fi
       fi
 
-      if [[ -n "${hints[$name]-}" && -n "$default" ]]; then
-        prompt_str="$name (${hints[$name]}) [$default]: "
-      elif [[ -n "${hints[$name]-}" ]]; then
-        prompt_str="$name (${hints[$name]}): "
-      elif [[ -n "$default" ]]; then
-        prompt_str="$name [$default]: "
+      if (( ! is_mod )) && [[ "$name" == target_schema && "$recipe" == (mysqlsh-load|mysqlsh-load-map) ]]; then
+        __j_schema_prompt "${input_values[host]}" "${input_values[user]}" \
+          "${input_values[port]:-3306}" "$default" "${hints[$name]-}" "$input_required" \
+          "$input_step" "${#params[@]}" || return 1
+      elif (( ! is_mod )) && [[ "$name" == mapping && "$recipe" == (mysqlsh-load|mysqlsh-load-map) ]]; then
+        __j_mapping_prompt "$default" "${hints[$name]-}" "$input_required" \
+          "$input_step" "${#params[@]}" || return 1
       else
-        prompt_str="$name: "
+        __j_prompt "$name" "$default" "${hints[$name]-}" "$input_required" \
+          "$input_step" "${#params[@]}" || return 1
       fi
-
-      vared -p "$prompt_str" val
-      val=${val:-$default}
+      val="$REPLY"
     fi
 
     args+=("$val")
+    input_values[$name]="$val"
     val=""
   done
+
+  # Reject known incompatible mapping options before confirmation or history.
+  if (( ! is_mod )) && [[ "$recipe" == mysqlsh-load-map || \
+      ( "$recipe" == mysqlsh-load && ( -n "${input_values[mapping]-}" || "${input_values[interactive]:-false}" == true || "${input_values[clear_target]:-false}" == true ) ) ]]; then
+    local ddl_policy="${input_values[on_exist]:-error}" drop_forced="${input_values[force_drop]:-false}"
+    if [[ "$ddl_policy" == drop || "$drop_forced" != false ]]; then
+      __j_card '매핑 옵션 오류' '기존 테이블 구조를 유지하는 모드입니다' \
+        on_exist "$ddl_policy (error 또는 ignore 사용)" force_drop "$drop_forced (false 사용)"
+      return 1
+    fi
+    __j_card '매핑 적재' '기존 테이블에 데이터만 적재' \
+      'DDL 처리' "구조 유지 · on_exist=$ddl_policy 미적용" \
+      '행 중복 처리' "${input_values[duplicates]:-error}" \
+      '타깃 전체 비우기' "${input_values[clear_target]:-false}"
+  fi
 
   # ── Resolve execution context ──
   # Module recipes are dry-run against their OWN justfile (so justfile_directory()

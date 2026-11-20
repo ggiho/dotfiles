@@ -1,5 +1,11 @@
 eval "$(/opt/homebrew/bin/brew shellenv)"
 eval "$(zoxide init zsh)"
+# fzf keybindings: Ctrl-T (files) and Alt-E (dirs). Loaded before atuin so Ctrl-R stays
+# atuin's, and before fzf-tab below so Tab stays fzf-tab's. fzf's default Alt-C is not
+# used: kanata's x+c chord sends it, so give it back to zsh and move the dir picker to Alt-E.
+eval "$(fzf --zsh)"
+bindkey -M emacs '\ee' fzf-cd-widget
+bindkey -M emacs '\ec' capitalize-word
 eval "$(atuin init zsh)"
 
 # --- user local executables ---
@@ -41,6 +47,11 @@ FZF_CATPPUCCIN+=',header:#89b4fa,info:#6c7086,label:#89b4fa'
 # Standalone fzf calls (the just picker and nf note finder in aliases.zsh).
 # --style=full gives bordered input/list/preview sections.
 export FZF_DEFAULT_OPTS="--style=full --layout=reverse --info=inline-right --highlight-line --marker=✓ $FZF_CATPPUCCIN"
+# Ctrl-T / Alt-E lists: fd (honours .gitignore, includes dotfiles) with bat / eza previews.
+export FZF_CTRL_T_COMMAND="fd --hidden --strip-cwd-prefix --exclude .git"
+export FZF_ALT_C_COMMAND="fd --type=d --hidden --strip-cwd-prefix --exclude .git"
+export FZF_CTRL_T_OPTS="--preview 'bat --color=always -n --line-range :500 {}'"
+export FZF_ALT_C_OPTS="--preview 'eza --icons=always --tree --color=always {} | head -200'"
 
 # --- fzf-tab: replaces the completion menu with an fzf picker ---
 # Must load after compinit but before plugins that wrap widgets (autosuggestions

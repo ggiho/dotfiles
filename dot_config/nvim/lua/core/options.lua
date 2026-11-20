@@ -31,6 +31,13 @@ opt.clipboard:append("unnamedplus")
 opt.splitright = true
 opt.splitbelow = true
 
+-- tmux repaints the whole pane when synchronized output (?2026l) ends, which wipes the
+-- kitty-protocol images image.nvim places through passthrough (WezTerm cell-attached images).
+-- Disable termsync only inside tmux so images survive redraws.
+if vim.env.TMUX then
+    opt.termsync = false
+end
+
 -- Global wrap stays off for code; soft-wrap prose filetypes to the window width.
 -- linebreak = break at word boundaries, breakindent = keep list/quote indent on wrap.
 vim.api.nvim_create_autocmd("FileType", {

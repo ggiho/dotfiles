@@ -1,8 +1,10 @@
 #!/usr/bin/env zsh
 set -eu
 
-TEST_ALIASES=${TEST_ALIASES:-$HOME/.config/zsh/aliases.zsh}
-TEST_JUSTFILE=${TEST_JUSTFILE:-$HOME/.config/justfile/justfile}
+repo_root=${0:A:h:h}
+TEST_ALIASES=${TEST_ALIASES:-$repo_root/dot_config/zsh/aliases.zsh}
+TEST_JUSTFILE=${TEST_JUSTFILE:-$repo_root/dot_config/justfile/justfile}
+export JUSTFILE="$TEST_JUSTFILE"
 
 # j builds its host picker from MYSQL_HOSTS_FILE. Point it at a fixture, not the real
 # ~/.config/mysql/hosts: this file is published, the real list is internal hostnames,
@@ -15,6 +17,7 @@ print -r -- 'Example DEV:db-dev.example.internal:3306:devuser' >> "$TEST_HOSTS_F
 export MYSQL_HOSTS_FILE=$TEST_HOSTS_FILE
 
 typeset -ga __vared_prompts
+typeset -ga __vared_initials __cards
 typeset -gA __prompt_answers
 # Answers consumed in prompt order. Prefer this over keying on the exact prompt
 # text, which changes whenever a hint is reworded.
@@ -23,6 +26,8 @@ typeset -g __buffer=""
 typeset -g __history=""
 typeset -g __atuin_cmd=""
 typeset -g __fzf_queue_file=""
+typeset -g __vared_rc=0
+typeset -g __schema_query_file='' __schema_query_rc=0
 
 cleanup() {
   if [[ -n "$__fzf_queue_file" && -f "$__fzf_queue_file" ]]; then
@@ -31,6 +36,7 @@ cleanup() {
   if [[ -n "$__fzf_input_file" && -f "$__fzf_input_file" ]]; then
     rm -f "$__fzf_input_file"
   fi
+  [[ -z "$__schema_query_file" ]] || rm -f "$__schema_query_file"
   return 0
 }
 # reset_mocks calls cleanup before every case, so the hosts fixture (shared by all
@@ -40,6 +46,10 @@ trap 'cleanup; rm -f "$TEST_HOSTS_FILE"' EXIT
 reset_mocks() {
   cleanup
   __vared_prompts=()
+  __vared_initials=()
+  __cards=()
+  __vared_rc=0
+  __schema_query_rc=0
   __prompt_answers=()
   __prompt_queue=()
   __buffer=""
@@ -48,6 +58,7 @@ reset_mocks() {
   __just_args=""
   __fzf_queue_file=$(mktemp)
   __fzf_input_file=$(mktemp)
+  __schema_query_file=$(mktemp)
   __confirm_prompt=""
   __confirm_answer="y"
   __fzf_query=""
@@ -90,6 +101,7 @@ fzf() {
     print -u2 -- 'fzf queue exhausted'
     return 1
   fi
+  [[ "$choice" == '__CANCEL__' ]] && return 130
   # Real fzf with --print-query emits the query line before the selection. The
   # host picker relies on that to tell "picked from the list" (two lines) from
   # "typed something not in the list" (one line); a single-line mock silently
@@ -102,6 +114,8 @@ vared() {
   [[ "${1-}" == '-p' ]] || return 1
   local prompt="$2"
   local varname="$3"
+  __vared_initials+=("${(P)varname}")
+  (( __vared_rc == 0 )) || return "$__vared_rc"
   local value="${__prompt_answers["$prompt"]-}"
   if [[ -z "$value" && ${#__prompt_queue[@]} -gt 0 ]]; then
     value="${__prompt_queue[1]}"
@@ -128,6 +142,16 @@ atuin() {
     __atuin_cmd="${@[-1]}"
   fi
   return 0
+}
+
+# Schema discovery must never contact a real database during these tests.
+security() { builtin print -r -- 'fixture-password'; }
+mysql() {
+  builtin print -r -- "${(j:|:)@}" > "$__schema_query_file"
+  [[ "${MYSQL_PWD:-}" == fixture-password ]] || return 1
+  (( __schema_query_rc == 0 )) || return "$__schema_query_rc"
+  builtin print -r -- 'analytics'
+  builtin print -r -- 'reporting warehouse'
 }
 
 assert_eq() {
@@ -177,6 +201,14 @@ __j_exec() {
   __buffer="bash -c $1"
 }
 
+# Capture cards in flow tests; exercise the real renderer separately below.
+if (( $+functions[__j_card] )); then
+  functions[__real_j_card]=$functions[__j_card]
+fi
+__j_card() {
+  __cards+=("${(j:|:)@}")
+}
+
 # Answer the [confirm] prompt without a terminal.
 __j_confirm() {
   __confirm_prompt="$1"
@@ -200,8 +232,8 @@ run_mysqlsh_dump_case() {
   assert_eq "$(grep -c '^[[:space:]]*$' "$__fzf_input_file")" '0' 'no blank lines in the picker'
   assert_contains "$(<"$__fzf_input_file")" 'mysqlsh-load' 'picker still lists grouped recipes'
   assert_eq "${#__vared_prompts[@]}" '2' 'mysqlsh-dump prompt count'
-  assert_eq "${__vared_prompts[1]}" 'threads (parallel threads (default: 4)) [4]: ' 'mysqlsh-dump first prompt'
-  assert_eq "${__vared_prompts[2]}" 'outdir (output directory (default: dump_<scope>_<timestamp>)): ' 'mysqlsh-dump second prompt'
+  assert_eq "${__vared_prompts[1]}" '  threads › ' 'mysqlsh-dump first prompt'
+  assert_eq "${__vared_prompts[2]}" '  outdir › ' 'mysqlsh-dump second prompt'
   assert_contains "$__buffer" 'bash -c ' 'mysqlsh-dump bash wrapper'
   assert_contains "$__buffer" 'mysqlsh --host=' 'mysqlsh-dump recipe body'
   assert_contains "$__buffer" '--threads=4' 'mysqlsh-dump threads default applied'
@@ -261,6 +293,7 @@ run_passthrough_case() {
   assert_eq "$__buffer" '' 'passthrough does not compose a bash -c body'
   assert_eq "$__history" '' 'passthrough writes no synthetic history entry'
   assert_eq "$__atuin_cmd" '' 'passthrough writes nothing to atuin'
+  assert_eq "$(<"$__schema_query_file")" '' 'passthrough does not query schemas'
 }
 
 # An argument containing spaces must survive as one word.
@@ -283,7 +316,7 @@ PICKED_HOST='Example DEV  →  db-dev.example.internal'
 run_confirm_accepted_case() {
   reset_mocks
   __confirm_answer='y'
-  queue_fzf "$MYSQLSH_LOAD_SIG" "$PICKED_HOST"
+  queue_fzf "$MYSQLSH_LOAD_SIG" "$PICKED_HOST" 1 error false
 
   j
 
@@ -295,12 +328,13 @@ run_confirm_accepted_case() {
   assert_contains "$__buffer" '--host="db-dev.example.internal"' 'host extracted from the picker label'
   assert_contains "$__buffer" '--user="devuser"' 'user taken from the picked host entry'
   assert_eq "${__buffer##*Example DEV*}" "$__buffer" 'label text does not leak into the command'
+  assert_contains "${(j:;:)__cards}" '접속 대상|Example DEV|host|db-dev.example.internal|기본 계정|devuser' 'picked host has a connection card'
 }
 
 run_confirm_declined_case() {
   reset_mocks
   __confirm_answer='n'
-  queue_fzf "$MYSQLSH_LOAD_SIG" "$PICKED_HOST"
+  queue_fzf "$MYSQLSH_LOAD_SIG" "$PICKED_HOST" 1 error false
 
   local rc=0
   set +e; j; rc=$?; set -e
@@ -323,6 +357,165 @@ run_no_confirm_case() {
   assert_contains "$__buffer" 'bash -c ' 'unmarked recipe still runs'
 }
 
+run_pretty_prompt_cases() {
+  reset_mocks
+  __j_prompt user devuser 'DB 접속 계정' 필수 2 7
+  assert_eq "$REPLY" devuser 'blank input keeps default'
+  assert_eq "${__vared_initials[1]}" devuser 'default is editable without retyping'
+  assert_contains "${(j:;:)__cards}" '설정 2/7|user' 'input card shows step and parameter'
+  assert_contains "${(j:;:)__cards}" '설명|DB 접속 계정' 'input card shows hint'
+  assert_contains "${(j:;:)__cards}" '기본값|devuser' 'input card shows default'
+
+  reset_mocks
+  __prompt_queue=('custom user')
+  __j_prompt user devuser 'DB 접속 계정' 필수 2 7
+  assert_eq "$REPLY" 'custom user' 'custom input preserves spaces'
+
+  reset_mocks
+  queue_fzf true
+  __j_prompt dry_run false '검사만 수행' 선택 6 7
+  assert_eq "$REPLY" true 'boolean picker returns the original value'
+  assert_eq "${#__vared_prompts[@]}" 0 'boolean uses a picker'
+  assert_contains "$(<"$__fzf_input_file")" 'false' 'boolean picker offers false'
+  assert_contains "$(<"$__fzf_input_file")" 'true' 'boolean picker offers true'
+
+  reset_mocks
+  queue_fzf skip
+  __j_prompt duplicates error '중복 키 처리' 선택 7 7
+  assert_eq "$REPLY" skip 'duplicate picker returns the original value'
+  assert_contains "$(<"$__fzf_input_file")" 'replace' 'duplicate picker offers replace'
+}
+
+run_prompt_cancel_cases() {
+  reset_mocks
+  queue_fzf '__CANCEL__'
+  local rc=0
+  set +e; __j_prompt dry_run false '검사만 수행' 선택 1 1; rc=$?; set -e
+  assert_eq "$rc" 1 'picker cancellation aborts'
+
+  reset_mocks
+  queue_fzf 'ddb-copy source_table="" new_table=""'
+  __vared_rc=130
+  set +e; j; rc=$?; set -e
+  assert_eq "$rc" 1 'text input cancellation aborts'
+  assert_eq "$__buffer" '' 'cancelled input runs nothing'
+  assert_eq "$__history" '' 'cancelled input writes no history'
+}
+
+run_card_renderer_case() {
+  local card COLUMNS=0
+  card=$(__real_j_card '접속 대상' '테스트 서버' 주소 'db.example.internal' 계정 testuser 2>&1)
+  assert_contains "$card" '╭' 'card has a border'
+  assert_contains "$card" '테스트 서버' 'card renders Korean labels'
+  assert_contains "$card" 'testuser' 'card renders values'
+  card=$(__real_j_card '설정 2/7' user 조작 'Enter: 기본값 유지 · Ctrl-C: 취소' 2>&1)
+  assert_contains "$card" 'Enter: 기본값 유지 · Ctrl-C: 취소' 'non-terminal width uses readable fallback'
+
+  local JUSTFILE='/does-not-exist/justfile'
+  card=$(__real_j_card '접속 대상' '테스트 서버' 계정 testuser 2>&1)
+  assert_contains "$card" 'testuser' 'custom justfile without renderer has a fallback'
+}
+
+run_target_schema_picker_cases() {
+  reset_mocks
+  queue_fzf "$MYSQLSH_LOAD_SIG" "$PICKED_HOST" 3 error false
+  __prompt_queue=(customuser 13306 2)
+  j
+  assert_contains "$(<"$__schema_query_file")" '--host=db-dev.example.internal' 'schema picker uses chosen host'
+  assert_contains "$(<"$__schema_query_file")" '--port=13306' 'schema picker uses entered port'
+  assert_contains "$(<"$__schema_query_file")" '--user=customuser' 'schema picker uses entered user'
+  assert_contains "$(<"$__schema_query_file")" 'SELECT SCHEMA_NAME' 'schema query is read-only'
+  assert_eq "${$(<"$__schema_query_file")##*fixture-password*}" "$(<"$__schema_query_file")" 'password is not in argv'
+  assert_contains "$__history" ' analytics ' 'selected schema reaches recipe'
+  assert_contains "$(<"$__fzf_input_file")" 'reporting warehouse' 'schema names preserve spaces'
+  assert_eq "${(j:|:)__vared_prompts##*target_schema*}" "${(j:|:)__vared_prompts}" 'schema is selected rather than typed'
+
+  reset_mocks
+  queue_fzf "$MYSQLSH_LOAD_SIG" "$PICKED_HOST" 2 error false
+  __prompt_queue=(devuser 3306 4 manual_schema)
+  j
+  assert_contains "$__history" ' manual_schema ' 'manual schema entry remains available'
+
+  reset_mocks
+  queue_fzf "$MYSQLSH_LOAD_SIG" "$PICKED_HOST" '__CANCEL__'
+  local rc=0
+  set +e; j; rc=$?; set -e
+  assert_eq "$rc" 1 'schema picker cancellation aborts'
+  assert_eq "$__buffer" '' 'schema cancellation executes nothing'
+  assert_eq "$__history" '' 'schema cancellation writes no history'
+
+  reset_mocks
+  __schema_query_rc=1
+  queue_fzf "$MYSQLSH_LOAD_SIG" "$PICKED_HOST" 2 error false
+  __prompt_queue=(devuser 3306 4 manual_schema)
+  j
+  assert_contains "$__history" ' manual_schema ' 'query failure still permits explicit manual input'
+  assert_contains "${(j:;:)__cards}" '목록 조회 실패' 'query failure is visible'
+
+  reset_mocks
+  queue_fzf 'mysqlsh-load-map host user port="3306" threads="4" target_schema="" mapping="" duplicates="error" dry_run="false"' "$PICKED_HOST" 4 1 error false
+  j
+  assert_contains "$__history" "'reporting warehouse'" 'map recipe keeps schema as one argument'
+}
+
+run_mapping_picker_cases() {
+  local root mapping_file
+  root=$(mktemp -d)
+  root=$(cd "$root" && pwd -P)
+  mapping_file="$root/saved mapping.json"
+  print -r -- '{"tables":{"source.people":{"target_table":"members"}}}' > "$mapping_file"
+  (
+    cd "$root"
+    reset_mocks
+    queue_fzf 'mysqlsh-load-map host user port="3306" threads="4" target_schema="" mapping="" duplicates="error" dry_run="false"' "$PICKED_HOST" 3 3 error false
+    j
+    assert_contains "$__history" "'${mapping_file}'" 'mapping picker preserves file path with spaces'
+    assert_contains "$(<"$__fzf_input_file")" 'saved mapping.json' 'mapping file is offered'
+    assert_eq "${(j:|:)__vared_prompts##*mapping*}" "${(j:|:)__vared_prompts}" 'mapping file does not require typing'
+
+    reset_mocks
+    queue_fzf 1
+    __j_mapping_prompt '' '매핑 설정' 선택 6 8
+    assert_eq "$REPLY" '' 'defer choice keeps mapping empty'
+    assert_contains "$(<"$__fzf_input_file")" '덤프 선택 후' 'defer choice explains when table mapping starts'
+
+    reset_mocks
+    queue_fzf 2
+    __prompt_queue=("$mapping_file")
+    __j_mapping_prompt '' '매핑 설정' 선택 6 8
+    assert_eq "$REPLY" "$mapping_file" 'manual mapping path remains available'
+
+    reset_mocks
+    queue_fzf '__CANCEL__'
+    local rc=0
+    set +e; __j_mapping_prompt '' '매핑 설정' 선택 6 8; rc=$?; set -e
+    assert_eq "$rc" 1 'mapping picker cancellation aborts'
+    assert_eq "$__buffer" '' 'mapping cancellation runs nothing'
+
+    local load_sig='mysqlsh-load host user port="3306" threads="4" target_schema="" on_exist="error" force_drop="false" mapping="" duplicates="error" dry_run="false" interactive="false"'
+    reset_mocks
+    queue_fzf "$load_sig" "$PICKED_HOST" 3 ignore false 3 replace false false
+    j
+    assert_contains "$__history" ' ignore false ' 'mapping permits the user chosen ignore policy'
+    assert_contains "$__history" ' replace false false' 'row replacement is preserved'
+    assert_contains "${(j:;:)__cards}" '행 중복 처리|replace' 'mapping summary shows the effective row policy'
+
+    local ddl_policy force_value
+    for ddl_policy force_value in drop false error true; do
+      reset_mocks
+      queue_fzf "$load_sig" "$PICKED_HOST" 3 "$ddl_policy" "$force_value" 3 replace false false
+      set +e; j; rc=$?; set -e
+      assert_eq "$rc" 1 'incompatible mapping DDL options are refused before running'
+      assert_eq "$__confirm_prompt" '' 'invalid mapping is not offered for approval'
+      assert_eq "$__history" '' 'invalid mapping writes no runnable history'
+      assert_eq "$__buffer" '' 'invalid mapping executes nothing'
+    done
+  )
+  local rc=$?
+  rm -rf "$root"
+  return "$rc"
+}
+
 run_passthrough_case
 run_passthrough_quoting_case
 run_confirm_accepted_case
@@ -330,5 +523,10 @@ run_confirm_declined_case
 run_no_confirm_case
 run_mysqlsh_dump_case
 run_ddb_copy_case
+run_pretty_prompt_cases
+run_prompt_cancel_cases
+run_card_renderer_case
+run_target_schema_picker_cases
+run_mapping_picker_cases
 
 builtin print -- 'test_j_wrapper: ok'

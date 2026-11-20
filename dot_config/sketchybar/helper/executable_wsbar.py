@@ -12,8 +12,8 @@ per change, so everything changes at the same moment.
   - label:     the front app's name (set here, so it can no longer run ahead of the icons)
   - guard:     a tiled window whose frame keeps flipping (app minimum size vs tile) is floated
   - under bar: a window whose title bar is under the bar (an app put it there later) is pushed down by aerospace/keepbelow
-  - displays:  when the displays macOS has differ from the ones SketchyBar knows (after unplugging and replugging
-               monitors), SketchyBar is restarted so every monitor gets its bar
+  - displays:  appwatch notifies us after display reconfiguration; verify actual item geometry and
+               restart SketchyBar only if it retained broken display state (no idle monitor polling)
 
 Set WSBAR_DRYRUN=1 to log the sketchybar calls instead of sending them.
 """
@@ -43,9 +43,6 @@ POLL_SECONDS = 3.0
 INPUT_QUIET_SECONDS = 5.0         # after one of the user's key bindings, moved windows are not a shake
 SWITCH_QUIET_SECONDS = 4.0        # after a workspace switch the periodic check only re-baselines
 STRUCT_POLL_SECONDS = 60.0      # how often AeroSpace is asked for the full window list when nothing seems to change
-HEAL_SECONDS = 20.0
-DISPLAY_SETTLE_SECONDS = 6.0     # monitors on a dock come up one after the other: wait before comparing
-DISPLAY_RESTART_GAP_SECONDS = 60.0
 BAR_BAND = 30                    # height of the bar: a window whose top edge is inside it has its title bar under the bar
 UNDER_BAR_GAP_SECONDS = 15.0
 UNDER_BAR_TRIES = 2              # tries per window before it is left alone (a window that will not move)
@@ -148,9 +145,16 @@ class Bar:
                     parts.append("%s:%s" % (item, a.replace("icon.background.image=app.", "img=")[:60]))
             log("DBG SEND %s | %s" % ("+".join(kinds), " ".join(parts)[:400]))
         try:
-            subprocess.run([SKETCHYBAR] + args, capture_output=True, timeout=6)
+            result = subprocess.run([SKETCHYBAR] + args, capture_output=True, timeout=6)
+            if result.returncode != 0:
+                raise RuntimeError("exit %s: %r" % (result.returncode, result.stderr))
         except Exception as e:
             log("sketchybar failed: %s" % e)
+            # Retry actual delivery failures on the next render, rather than reasserting
+            # every item periodically even when nothing changed.
+            self.img.clear()
+            self.cheap.clear()
+            self.label = None
 
     def add_slot(self, ws, n):
         a = ["--add", "item", "wsapp.%s.%d" % (ws, n), "left",
@@ -168,11 +172,6 @@ class Bar:
         # a new slot knows nothing yet
         self.img.pop("wsapp.%s.%d" % (ws, n), None)
         self.cheap.pop("wsapp.%s.%d" % (ws, n), None)
-
-    def heal(self):
-        """Forget the cheap state so the next render re-asserts it (images are not touched)."""
-        self.cheap.clear()
-        self.label = None
 
     def render(self, s):
         args = []
@@ -231,7 +230,7 @@ class Bar:
         if name and name != self.label:
             args += ["--set", "front_app", "label=" + name, "label.drawing=on"]
             self.label = name
-        elif name == "" and self.label:
+        elif name == "" and self.label != "":
             args += ["--set", "front_app", "label=", "label.drawing=off"]
             self.label = ""
 
@@ -382,32 +381,6 @@ def mouse_button_down():
         return False
 
 
-def system_display_ids():
-    """Ids of the displays macOS has active (empty if that could not be read)."""
-    try:
-        return frozenset(i for i, _ in _active_displays())
-    except Exception as e:
-        log("display ids failed: %s" % e)
-        return frozenset()
-
-
-def bar_display_ids():
-    """Ids of the displays SketchyBar draws on (None if it did not answer)."""
-    try:
-        return frozenset(int(d["DirectDisplayID"]) for d in json.loads(run([SKETCHYBAR, "--query", "displays"])))
-    except Exception:
-        return None
-
-
-def sketchybar_service_label():
-    """The launchd label of the SketchyBar service (sh.brew.sketchybar or homebrew.mxcl.sketchybar)."""
-    for line in run(["/bin/launchctl", "list"]).splitlines():
-        label = line.split("\t")[-1].strip()
-        if re.match(r"^(sh\.brew|homebrew\.mxcl)\.sketchybar$", label):
-            return label
-    return None
-
-
 def take_snapshot():
     """All the slow lookups, in parallel. Returns a dict, or None if AeroSpace did not answer.
     The dict carries a ticket, numbered when the look started (see Daemon.handle, "snapshot")."""
@@ -446,18 +419,14 @@ class Daemon:
         self.refresh_check = False     # a pending refresh first checks whether the set of windows changed
         self.last_rows = None          # window list of the last snapshot, reused by light refreshes
         self.poll_busy = False
+        self.display_epoch = 0       # invalidate checks from an earlier connect/disconnect
         self.last_ids = None         # on-screen window ids at the last poll
         self.last_full = 0.0         # when AeroSpace was last asked for the full window list by the poll
         self.last_frames = None
         self.suspects = {}       # window id -> time first flagged
         self.cooldown = {}       # window id -> time last floated
-        self.last_heal = time.time()
         self.under_bar_at = 0.0
         self.under_bar_tries = {}      # window id -> times keepbelow was asked about it
-        self.display_ids = None        # displays macOS had active at the last look
-        self.display_changed_at = 0.0
-        self.display_checked = False   # SketchyBar's list was compared for this set of displays
-        self.display_restart_at = 0.0
         self.recheck_pending = False
         self.verify_after = False     # a window or app went: the next full look is checked against the system's list
         self.applied_ticket = 0       # the newest look at the system that has been shown
@@ -495,13 +464,13 @@ class Daemon:
             time.sleep(1.0)
 
     def appwatch_loop(self):
-        """macOS app activations (Dock click, Cmd+Tab, Raycast) from the small appwatch helper."""
+        """macOS app and display notifications from the small appwatch helper."""
         if not os.path.exists(APPWATCH):
             log("appwatch helper missing; activation guard is off")
             return
         while True:
             try:
-                p = subprocess.Popen([APPWATCH], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                p = subprocess.Popen([APPWATCH], stdout=subprocess.PIPE,
                                      text=True, bufsize=1)
                 self.children.append(p)
                 for line in p.stdout:
@@ -510,6 +479,8 @@ class Daemon:
                         self.q.put(("mac", (name, time.time())))
                     elif kind == "terminate" and name:
                         self.q.put(("terminated", name))
+                    elif kind == "displays":
+                        self.q.put(("displays", None))
                 p.wait()
                 self.children.remove(p)
             except Exception as e:
@@ -577,37 +548,6 @@ class Daemon:
         if snap:
             self.q.put(("snapshot", snap))
 
-    def check_displays(self, now):
-        """SketchyBar draws one bar per display it knows. After monitors were unplugged and plugged back in (docks bring
-        them up late and with new ids) it can keep an old list, and a monitor then has no bar at all. When the displays
-        macOS has differ from the ones SketchyBar knows a few seconds after they last changed, restart SketchyBar
-        (once per set of displays: if it still disagrees afterwards, a restart will not help)."""
-        ids = system_display_ids()
-        if not ids:
-            return
-        if ids != self.display_ids:
-            self.display_ids, self.display_changed_at, self.display_checked = ids, now, False
-            return
-        if self.display_checked or now - self.display_changed_at < DISPLAY_SETTLE_SECONDS:
-            return
-        known = bar_display_ids()
-        if known is None:
-            return                                  # SketchyBar did not answer: look again next time
-        self.display_checked = True
-        if known == ids or DRYRUN:
-            return
-        label = sketchybar_service_label()
-        if not label or now - self.display_restart_at <= DISPLAY_RESTART_GAP_SECONDS:
-            log("DISPLAYS macOS has %s, SketchyBar knows %s: not restarted (label %s, last restart %.0fs ago)"
-                % (sorted(ids), sorted(known), label, now - self.display_restart_at))
-            return
-        self.display_restart_at = now
-        log("DISPLAYS macOS has %s, SketchyBar knows %s: restarting SketchyBar (%s)" % (sorted(ids), sorted(known), label))
-        with open(SHAKE_LOG, "a") as fh:
-            fh.write("%s displays %s vs SketchyBar %s: SketchyBar restarted\n" % (time.strftime("%F %T"), sorted(ids), sorted(known)))
-        subprocess.Popen(["/bin/launchctl", "kickstart", "-k", "gui/%d/%s" % (UID, label)],
-                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
-
     def check_under_bar(self, frames, now):
         """keepbelow runs when a window is created, but an app can put its window under the bar later (it restores its
         old position, or macOS gathers the windows at the top of a monitor that was plugged back in). Windows whose top
@@ -643,13 +583,81 @@ class Daemon:
             subprocess.Popen([KEEPBELOW], env=dict(os.environ, KEEPBELOW_NOWAIT="1"),
                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
 
+    def restart_broken_bar(self):
+        """A fresh process clears display state that an in-process reset did not repair.
+
+        Persist the limit: restarting the service also replaces this daemon.
+        """
+        cooldown = STATE_DIR + "/display-restart-at"
+        now = time.time()
+        try:
+            with open(cooldown) as f:
+                if now - float(f.read()) < 60:
+                    log("DISPLAYS restart suppressed by persistent 60s limit")
+                    return
+        except (OSError, ValueError):
+            pass
+        labels = run(["/bin/launchctl", "list"]).splitlines()
+        label = next((line.split()[-1] for line in labels if line.split()
+                      and line.split()[-1] in ("sh.brew.sketchybar", "homebrew.mxcl.sketchybar")), None)
+        if not label:
+            log("DISPLAYS cannot repair: SketchyBar service not found")
+            return
+        if DRYRUN:
+            log("DRYRUN would restart SketchyBar for incorrect geometry")
+            return
+        os.makedirs(STATE_DIR, exist_ok=True)
+        with open(cooldown, "w") as f:
+            f.write(str(now))
+        log("DISPLAYS verified incorrect geometry: restarting SketchyBar once")
+        subprocess.Popen(["/bin/launchctl", "kickstart", "-k", "gui/%d/%s" % (UID, label)],
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+
+    def repair_display_layout(self, attempt=0, epoch=None):
+        """Check actual left/right item windows only after an OS display event.
+
+        --query displays describes monitors, not the bar windows. A healthy native
+        reconfiguration needs no extra reset (window destruction can be expensive).
+        """
+        try:
+            displays = _active_displays()
+            if not displays:
+                return
+            items = [json.loads(run([SKETCHYBAR, "--query", name]))["bounding_rects"]
+                     for name in ("space.6", "calendar")]
+        except (ValueError, KeyError, TypeError, OSError):
+            # The native reset may still be busy. Bounded event-local retries only.
+            if attempt < 8:
+                # A real dock reconnect left IPC unavailable for tens of seconds.
+                # Back off for up to 47 seconds after this event; no idle polling.
+                threading.Timer(min(2 ** attempt, 8), lambda: self.q.put(
+                    ("display-retry", (epoch, attempt + 1)))).start()
+            else:
+                log("DISPLAYS layout query unavailable after event retries")
+            return
+        for _, (x0, y0, x1, _) in displays:
+            for side, rects in enumerate(items):
+                valid = False
+                for rect in rects.values():
+                    x, y = rect["origin"]
+                    w, h = rect["size"]
+                    # Anchors match sketchybarrc: space.6 follows the Apple icon;
+                    # calendar is the rightmost item, with 12 points of inset.
+                    anchored = x - x0 < 100 if side == 0 else x1 - (x + w) < 20
+                    if h > 1 and abs(y - y0) < 1 and x0 <= x and x + w <= x1 and anchored:
+                        valid = True
+                        break
+                if not valid:
+                    self.restart_broken_bar()
+                    return
+        log("DISPLAYS item geometry correct: no rebuild")
+
     def poll_worker(self):
         """Every few seconds: look at the system's window list (cheap, no AeroSpace). Only when the set
         of windows changed (or every STRUCT_POLL_SECONDS as a safety net) ask AeroSpace for everything."""
         try:
             frames = poll_frames()
             now = time.time()
-            self.check_displays(now)
             if not frames:
                 # winframes is missing or failing (a new machine before its Swift helpers were built):
                 # the system's window list is not available, so the slow safety net is all there is
@@ -890,6 +898,14 @@ class Daemon:
                 self.request_refresh(0.15)
         elif kind == "mac":
             self.on_mac_activate(*payload)
+        elif kind == "displays":
+            self.display_epoch += 1
+            self.repair_display_layout(epoch=self.display_epoch)
+            self.request_refresh(0.1)
+        elif kind == "display-retry":
+            epoch, attempt = payload
+            if epoch == self.display_epoch:
+                self.repair_display_layout(attempt, epoch)
         elif kind == "winchange":
             self.request_refresh(0.1)          # a window came or went
             self.verify_after = True
@@ -929,9 +945,6 @@ class Daemon:
             if not self.poll_busy:
                 self.poll_busy = True
                 threading.Thread(target=self.poll_worker, daemon=True).start()
-            if time.time() - self.last_heal > HEAL_SECONDS:
-                self.bar.heal()
-                self.last_heal = time.time()
 
     def loop(self):
         while True:

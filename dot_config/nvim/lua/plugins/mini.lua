@@ -76,6 +76,9 @@ return {
 
 			require("mini.splitjoin").setup()
 
+			-- ga<motion><char> aligns text on <char> (e.g. `gaip|` aligns a markdown table)
+			require("mini.align").setup()
+
 			-- vim-surround (tpope) style: ys / ds / cs — keeps native `s` free
 			require("mini.surround").setup({
 				mappings = {
