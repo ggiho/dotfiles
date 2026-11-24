@@ -262,8 +262,11 @@ PGQ_PY          := justfile_directory() + "/lib/pgq.py"
 PGQ_PYTHON      := env_var_or_default("PGQ_PYTHON", env_var("HOME") + "/.local/share/uv/tools/pgcli/bin/python")
 # ddb-create / ddb-copy 의 스크립트는 yaml 과 boto3 가 필요하다. PATH 의 python3 에 기대지
 # 않는다: 부르는 셸에 따라 macOS 기본 3.9(/usr/bin, 둘 다 없음)가 잡혀서 j 로 돌릴 때
-# "No module named 'yaml'" 로 죽었다.
-DDB_PYTHON      := env_var_or_default("DDB_PYTHON", "/opt/homebrew/bin/python3")
+# "No module named 'yaml'" 로 죽었다. brew python3 도 안 된다: brew upgrade 로 3.14→3.15 가
+# 되자 site-packages 가 새로 비어서 또 죽었다. 그래서 uv 관리 파이썬의 전용 venv 를 쓴다.
+# 없으면: uv venv ~/.local/share/ddb-venv --managed-python --python 3.13 &&
+#         uv pip install --python ~/.local/share/ddb-venv/bin/python pyyaml boto3
+DDB_PYTHON      := env_var_or_default("DDB_PYTHON", env_var("HOME") + "/.local/share/ddb-venv/bin/python")
 # ddb-delete: 키 목록(DynamoDB JSON)을 받아 BatchWriteItem 으로 지운다.
 DDB_DELETE_PY   := justfile_directory() + "/lib/ddb_delete.py"
 # Parses the Aurora audit CSV (quoted query field, microsecond timestamps).
